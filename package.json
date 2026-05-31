@@ -1,0 +1,32 @@
+{
+  "name": "lumina",
+  "version": "1.0.0",
+  "description": "A self-hosted, zero-backend, glassmorphism PWA that turns your offline course folders into a beautiful, sequential learning experience.",
+  "main": "server.js",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "node build-web.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rayedriasat/lumina.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/rayedriasat/lumina/issues"
+  },
+  "homepage": "https://github.com/rayedriasat/lumina#readme",
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-fs": "^2.5.1"
+  }
+}

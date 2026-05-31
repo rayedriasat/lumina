@@ -46,8 +46,8 @@ We need native filesystem and dialog access because WebView2 doesn't support the
 Run these commands to add the plugins:
 ```bash
 npm install @tauri-apps/plugin-dialog@latest @tauri-apps/plugin-fs@latest
-npx tauri plugin add dialog
-npx tauri plugin add fs
+npx tauri add dialog
+npx tauri add fs
 ```
 *(This will automatically update your Rust `Cargo.toml` and code!)*
 
@@ -66,7 +66,7 @@ Open the generated file `src-tauri/capabilities/default.json` and update its `pe
     "dialog:default",
     "fs:default",
     {
-      "identifier": "fs:allow-read-directory",
+      "identifier": "fs:allow-read-dir",
       "allow": [{ "path": "**" }]
     },
     {
