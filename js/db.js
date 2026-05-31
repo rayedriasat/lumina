@@ -14,10 +14,19 @@ export function openDB() {
 }
 export async function putCourse(c) {
   const db = await openDB();
+  const cToSave = { ...c };
+  if (cToSave.isNative && cToSave.handle) {
+    cToSave.handle = {
+      name: cToSave.handle.name,
+      kind: cToSave.handle.kind,
+      path: cToSave.handle.path,
+      uri: cToSave.handle.uri
+    };
+  }
   return new Promise((res, rej) => {
     const tx = db.transaction('courses', 'readwrite');
     const st = tx.objectStore('courses');
-    const r = st.put(c);
+    const r = st.put(cToSave);
     r.onsuccess = () => res(c);
     r.onerror = () => rej(r.error);
   });

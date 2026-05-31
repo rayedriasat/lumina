@@ -18,6 +18,21 @@ export async function pickTauriFolder() {
   return createTauriHandle(selectedPath, folderName, readDir, readTextFile, convertFileSrc);
 }
 
+export async function restoreNativeHandle(data) {
+  if (!data) return null;
+  if (window.__TAURI__) {
+    const { readDir, readTextFile } = window.__TAURI__.fs;
+    const { convertFileSrc } = window.__TAURI__.tauri;
+    return createTauriHandle(data.path, data.name, readDir, readTextFile, convertFileSrc, data.kind === 'directory');
+  }
+  if (window.Capacitor) {
+    const Filesystem = window.Capacitor.Plugins.Filesystem;
+    const Capacitor = window.Capacitor;
+    return createCapacitorHandle(data.uri, data.name, Filesystem, Capacitor, data.kind === 'directory');
+  }
+  return null;
+}
+
 function createTauriHandle(path, name, readDir, readTextFile, convertFileSrc, isDir = true) {
   return {
     kind: isDir ? 'directory' : 'file',
@@ -63,10 +78,10 @@ function createTauriHandle(path, name, readDir, readTextFile, convertFileSrc, is
  *      directly as a <video> or <audio> src.
  */
 export async function pickCapacitorFolder() {
-  // Dynamically import to avoid crashing in non-Capacitor environments
-  const { FilePicker } = await import('@capawesome/capacitor-file-picker');
-  const { Filesystem } = await import('@capacitor/filesystem');
-  const { Capacitor } = await import('@capacitor/core');
+  // Access global Capacitor bridge
+  const FilePicker = window.Capacitor.Plugins.FilePicker;
+  const Filesystem = window.Capacitor.Plugins.Filesystem;
+  const Capacitor = window.Capacitor;
 
   let pickedUri;
   try {
@@ -74,7 +89,7 @@ export async function pickCapacitorFolder() {
     pickedUri = result.path; // content:// URI granted by the user via SAF
   } catch (err) {
     // User cancelled the picker
-    if (err && (err.message === 'pickDirectory cancelled' || err.code === 'CANCELLED')) {
+    if (err && (err.message?.toLowerCase().includes('cancel') || err.code === 'CANCELLED')) {
       return null;
     }
     throw err;
@@ -122,6 +137,19 @@ function createCapacitorHandle(uri, name, Filesystem, Capacitor, isDir = true) {
     kind: isDir ? 'directory' : 'file',
     name,
     uri, // Expose the raw URI for debugging / advanced use
+
+    async requestPermission() {
+      try {
+        let status = await Filesystem.checkPermissions();
+        if (status.publicStorage !== 'granted') {
+          status = await Filesystem.requestPermissions();
+        }
+        return status.publicStorage === 'granted' ? 'granted' : 'denied';
+      } catch (e) {
+        console.warn('Capacitor check/request permissions failed', e);
+        return 'granted';
+      }
+    },
 
     /**
      * Async generator that yields [childName, childHandle] pairs,
@@ -186,11 +214,10 @@ function createCapacitorHandle(uri, name, Filesystem, Capacitor, isDir = true) {
         nativeUrl,
 
         async text() {
-          // readFile with Encoding.UTF8 returns a string
-          const { Encoding } = await import('@capacitor/filesystem');
+          // readFile with encoding: 'utf8' returns a string
           const result = await Filesystem.readFile({
             path: uri,
-            encoding: Encoding.UTF8,
+            encoding: 'utf8',
           });
           return result.data;
         },

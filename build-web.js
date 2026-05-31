@@ -3,7 +3,7 @@ const path = require('path');
 
 const srcDir = __dirname;
 const destDir = path.join(__dirname, 'dist');
-const ignoreDirs = ['node_modules', 'src-tauri', '.git', 'dist'];
+const ignoreDirs = ['node_modules', 'src-tauri', '.git', 'dist', 'android', 'capacitor-cordova-android-plugins', '.vscode'];
 
 function copySync(src, dest) {
   if (ignoreDirs.includes(path.basename(src))) return;

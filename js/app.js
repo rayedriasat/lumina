@@ -122,10 +122,17 @@ async function processNativeCourse(nativeHandle) {
 export async function loadCourses() {
   state.courses = await getCourses();
   for (const c of state.courses) {
+    if (c.isNative && c.handle) {
+      const m = await import('./native-fs.js');
+      c.handle = await m.restoreNativeHandle(c.handle);
+    } 
+    
     if (c.handle && c.handle.requestPermission) {
       try { await c.handle.requestPermission({ mode: 'readwrite' }); } catch(e){}
     }
+    
     try {
+      if (!c.handle) throw new Error('Missing file handle');
       await ensureProgress(c);
       c.tree = await scanDirectory(c.handle);
       c.flatFiles = flattenFiles(c.tree);
