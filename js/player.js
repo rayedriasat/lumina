@@ -52,7 +52,7 @@ export async function loadFile(entry) {
   state.currentFile = entry;
 
   const file = await entry.handle.getFile();
-  const url = URL.createObjectURL(file);
+  const url = file.nativeUrl || URL.createObjectURL(file);
   state.activeBlobUrl = url;
 
   const viewerWrap = document.getElementById('viewer-wrap');
@@ -287,7 +287,8 @@ function setupPeek(url) {
   tooltip.className = 'seek-peek-tooltip';
   tooltip.style.display = 'none';
   tooltip.innerHTML = `<canvas id="peek-canvas" width="160" height="90"></canvas><div class="peek-time">00:00</div>`;
-  document.body.appendChild(tooltip);
+  const plyrContainer = document.querySelector('.plyr') || document.body;
+  plyrContainer.appendChild(tooltip);
 
   const canvas = tooltip.querySelector('#peek-canvas');
   const ctx = canvas.getContext('2d');
@@ -312,8 +313,7 @@ function setupPeek(url) {
 
     tooltip.style.display = 'block';
     const tx = Math.max(90, Math.min(window.innerWidth - 90, clientX));
-    const tooltipHeight = tooltip.offsetHeight || 105;
-    const ty = rect.top - tooltipHeight - 4;
+    const ty = rect.top - 10;
     tooltip.style.left = tx + 'px';
     tooltip.style.top = (ty < 4 ? 4 : ty) + 'px';
     tooltip.querySelector('.peek-time').textContent = fmtTime(time);

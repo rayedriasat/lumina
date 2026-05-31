@@ -147,9 +147,9 @@ body {
 /* Seekbar peek */
 .seek-peek-tooltip {
   pointer-events: none;
-  position: absolute;
-  z-index: 9999;
-  transform: translate(-50%, -110%);
+  position: fixed;
+  z-index: 99999;
+  transform: translate(-50%, -100%);
   background: rgba(0,0,0,0.85);
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 8px;

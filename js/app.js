@@ -61,6 +61,15 @@ window.addEventListener('keydown', (e) => {
 
 /* ---------- Course management ---------- */
 export async function pickCourseFolder() {
+  if (window.__TAURI__) {
+    import('./native-fs.js').then(m => m.pickTauriFolder().then(processNativeCourse).catch(e => alert(e)));
+    return;
+  }
+  if (window.Capacitor) {
+    import('./native-fs.js').then(m => m.pickCapacitorFolder().then(processNativeCourse).catch(e => alert(e)));
+    return;
+  }
+  
   if (!window.showDirectoryPicker) {
     alert('File System Access API is not available in this browser. Please use Chrome or Edge on desktop, or use the native app wrapper.');
     return;
@@ -71,6 +80,7 @@ export async function pickCourseFolder() {
       id: crypto.randomUUID(),
       name: dirHandle.name,
       handle: dirHandle,
+      isNative: false,
       addedAt: Date.now(),
       lastOpened: Date.now(),
       progress: { version: 1, files: {} },
@@ -82,6 +92,23 @@ export async function pickCourseFolder() {
   } catch (e) {
     if (e.name !== 'AbortError') alert('Error selecting folder: ' + e.message);
   }
+}
+
+async function processNativeCourse(nativeHandle) {
+  if (!nativeHandle) return;
+  const course = {
+    id: crypto.randomUUID(),
+    name: nativeHandle.name,
+    handle: nativeHandle,
+    isNative: true,
+    addedAt: Date.now(),
+    lastOpened: Date.now(),
+    progress: { version: 1, files: {} },
+    collapsed: new Set()
+  };
+  await putCourse(course);
+  await loadCourses();
+  await openCourse(course.id);
 }
 
 export async function loadCourses() {
@@ -117,7 +144,7 @@ async function ensureProgress(course) {
 
 async function getVideoDuration(file) {
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
+    const url = file.nativeUrl || URL.createObjectURL(file);
     const v = document.createElement('video');
     v.preload = 'metadata';
     v.muted = true;
@@ -190,7 +217,7 @@ export async function openCourse(id, filePath = null, seekTime = 0) {
   render();
 
   let target = filePath ? course.flatFiles.find(f => f.path === filePath) : null;
-  if (!target) target = course.flatFiles.find(f => !f.progress?.files?.[f.path]?.completed) || course.flatFiles[0];
+  if (!target) target = course.flatFiles.find(f => !course.progress?.files?.[f.path]?.completed) || course.flatFiles[0];
 
   if (target) {
     await loadFile(target);
