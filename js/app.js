@@ -53,10 +53,18 @@ window.addEventListener('lumina-resize', () => {
 window.addEventListener('keydown', (e) => {
   if (state.view !== 'player') return;
   if (['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
+  
+  const key = e.key.toLowerCase();
   if (e.key === 'ArrowRight') { e.preventDefault(); nextFile(); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); prevFile(); }
-  else if (e.key.toLowerCase() === 'c') { toggleComplete(); }
-  else if (e.key.toLowerCase() === 'b') { addBookmark(); }
+  else if (key === 'b') { addBookmark(); }
+  else if (key === 'g') { if (state.player) state.player.speed = 1.8; }
+  else if (key === 'h') { if (state.player) state.player.speed = 2.5; }
+  else if (key === 'y') { if (state.player) state.player.speed = 3.0; }
+  else if (key === 's') { if (state.player) state.player.speed = Math.max(0.1, state.player.speed - 0.1); }
+  else if (key === 'd') { if (state.player) state.player.speed = state.player.speed + 0.1; }
+  else if (key === 'z') { if (state.player) state.player.currentTime -= 10; }
+  else if (key === 'x') { if (state.player) state.player.currentTime += 10; }
 });
 
 /* ---------- Course management ---------- */

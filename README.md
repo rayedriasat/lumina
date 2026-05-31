@@ -78,31 +78,37 @@ A self-hosted, zero-backend, glassmorphism PWA that turns your offline course fo
 
 ---
 
-## 📦 Shipping Options
+## 📦 Shipping & Release
 
-### A. PWA (Desktop & Android Chrome)
-Works exactly as above. Best for:
-- Personal use on Windows/Mac/Linux with Chrome/Edge.
-- Android if you can run Chrome and pick folders via the **File System Access API**.
+Lumina v2 is fully configured as a monorepo containing everything needed for web, desktop, and mobile platforms in a single codebase.
 
-### B. Tauri Desktop App (Recommended for sharing)
-A ~5–15 MB native `.exe` / `.app` with no browser dependency.
+### Project Structure
+- **`/` (Root)**: Contains the core PWA web application (HTML, CSS, JS) and offline capabilities (Service Worker, Manifest).
+- **`/src-tauri`**: Contains the Rust-based Tauri configuration for building the lightweight native Desktop application (Windows/macOS/Linux).
+- **`/android`**: Contains the Capacitor-based Android Studio project for building the native APK/AAB.
 
-**Setup:**
+### 1. Web / GitHub Pages
+The root directory is ready to be hosted as a static site. It can be directly deployed to GitHub Pages or any static hosting (Vercel, Netlify).
+
+### 2. Desktop (Tauri)
+To build the native desktop app (e.g., Windows `.exe`, `.msi`):
 ```bash
-cd lumina-tauri/src-tauri
+cd src-tauri
+cargo install tauri-cli
 cargo tauri build
 ```
-*(Requires [Rust](https://rustup.rs/) and Tauri CLI.)*
+The compiled installers (NSIS/MSI) will be located in `src-tauri/target/release/bundle/`.
 
-Tauri uses the system's WebView. On **Windows**, Edge WebView2 supports the File System Access API natively, so the web code runs unchanged. On Linux/macOS you may need to adapt file picking to Tauri's `dialog` API if the WebView does not support `showDirectoryPicker`.
-
-### C. Capacitor Android App
-A native APK wrapper with a WebView.
+### 3. Android (Capacitor)
+To build the Android app:
+```bash
+npx cap sync android
+npx cap open android
+```
+From Android Studio, you can generate a signed APK or App Bundle (`.aab`) via **Build > Generate Signed Bundle / APK**.
 
 **Setup:**
 ```bash
-cd lumina-capacitor
 npm install
 npx cap add android
 npx cap sync
@@ -140,17 +146,6 @@ lumina/
 │   └── pdf_viewer.css
 └── icon-*.png
 
-lumina-tauri/               # Native desktop wrapper (Tauri v1)
-└── src-tauri/
-    ├── Cargo.toml
-    ├── build.rs
-    ├── tauri.conf.json
-    ├── src/main.rs
-    └── icons/
-
-lumina-capacitor/           # Native Android wrapper (Capacitor)
-├── capacitor.config.json
-└── package.json
 ```
 
 ---

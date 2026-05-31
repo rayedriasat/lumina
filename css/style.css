@@ -147,7 +147,7 @@ body {
 /* Seekbar peek */
 .seek-peek-tooltip {
   pointer-events: none;
-  position: fixed;
+  position: absolute;
   z-index: 99999;
   transform: translate(-50%, -100%);
   background: rgba(0,0,0,0.85);
@@ -164,6 +164,10 @@ body {
   color: #fff;
   text-align: center;
   background: rgba(0,0,0,0.6);
+}
+
+.plyr__progress .plyr__tooltip {
+  display: none !important;
 }
 
 /* Right panel (subtitles) */

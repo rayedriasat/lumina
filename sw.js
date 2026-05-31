@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lumina-v2';
+const CACHE_NAME = 'lumina-v3';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -43,16 +43,23 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
-  if (request.destination === 'document' || request.destination === 'script' || request.destination === 'style' || request.destination === 'image' || request.destination === 'manifest' || url.pathname.endsWith('.mjs')) {
-    event.respondWith(
-      caches.match(request).then(cached => {
-        if (cached) return cached;
-        return fetch(request).then(response => {
-          return response;
-        }).catch(() => {
-          if (request.mode === 'navigate') return caches.match('/index.html');
-        });
+  
+  // Exclude extension requests or API calls if any
+  if (url.protocol.startsWith('chrome-extension') || url.protocol === 'about:') return;
+
+  event.respondWith(
+    fetch(request)
+      .then(response => {
+        // Only cache successful responses for GET requests
+        if (request.method === 'GET' && response.status === 200) {
+          const resClone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, resClone));
+        }
+        return response;
       })
-    );
-  }
+      .catch(() => caches.match(request).then(cached => {
+        if (cached) return cached;
+        if (request.mode === 'navigate') return caches.match('/index.html');
+      }))
+  );
 });

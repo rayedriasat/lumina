@@ -48,7 +48,24 @@ export function overallProgress(course) {
 
 export async function loadFile(entry) {
   if (!entry) return;
-  cleanupMedia();
+
+  const isSeamlessVideo = entry.type === 'video' && state.currentFile?.type === 'video' && state.player && window.Plyr;
+
+  if (!isSeamlessVideo) {
+    cleanupMedia();
+  } else {
+    // Partial cleanup
+    if (state.saveTimer) { clearInterval(state.saveTimer); state.saveTimer = null; }
+    if (state.activeBlobUrl) { URL.revokeObjectURL(state.activeBlobUrl); state.activeBlobUrl = null; }
+    state.activeSubUrls.forEach(u => URL.revokeObjectURL(u));
+    state.activeSubUrls = [];
+    state.cueData = [];
+    if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
+    if (state.peekVideo) { state.peekVideo = null; }
+    if (state.autoProceedTimer) { clearTimeout(state.autoProceedTimer); state.autoProceedTimer = null; }
+    document.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
+  }
+
   state.currentFile = entry;
 
   const file = await entry.handle.getFile();
@@ -68,6 +85,7 @@ export async function loadFile(entry) {
     const baseName = entry.name.substring(0, entry.name.lastIndexOf('.'));
     const parentDir = await resolveDirHandle(state.currentCourse.handle, dirPath);
     let tracksHtml = '';
+    const plyrTracks = [];
     const candidates = [`${baseName}.vtt`, `${baseName}.en.vtt`, `${baseName}.srt`, `${baseName}.en.srt`];
     state.cueData = [];
     for (const cn of candidates) {
@@ -79,7 +97,9 @@ export async function loadFile(entry) {
         const blob = new Blob([txt], { type: 'text/vtt' });
         const u = URL.createObjectURL(blob);
         state.activeSubUrls.push(u);
-        tracksHtml += `<track src="${u}" kind="subtitles" srclang="en" label="${cn.includes('.en.') ? 'English' : 'Subtitle'}" default>`;
+        const label = cn.includes('.en.') ? 'English' : 'Subtitle';
+        tracksHtml += `<track src="${u}" kind="subtitles" srclang="en" label="${label}" default>`;
+        plyrTracks.push({ src: u, kind: 'subtitles', srclang: 'en', label, default: true });
         const cues = parseVTT(txt);
         if (cues.length) state.cueData = cues;
       } catch(e){}
@@ -88,24 +108,15 @@ export async function loadFile(entry) {
     const savedPos = state.currentCourse.progress?.files?.[entry.path]?.position || 0;
     const autoplay = true;
 
-    viewerWrap.innerHTML = `
-      <div class="w-full flex items-center justify-center p-3 md:p-6 animate-fade-in">
-        <div class="w-full max-w-[96vw] md:max-w-[88vw] aspect-video relative" style="max-height:calc(100vh - 3.5rem)">
-          <video id="lumina-video" controls crossorigin playsinline class="w-full h-full" preload="metadata" ${autoplay ? 'autoplay' : ''}>
-            <source src="${url}" type="${file.type || 'video/mp4'}">
-            ${tracksHtml}
-          </video>
-        </div>
-      </div>`;
-
-    if (window.Plyr) {
-      state.player = new Plyr('#lumina-video', {
-        controls: ['play-large','play','progress','current-time','mute','volume','captions','settings','pip','airplay','fullscreen'],
-        settings: ['captions','quality','speed'],
-        speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5] },
-        keyboard: { focused: true, global: true }
-      });
-      state.player.on('ready', () => {
+    if (isSeamlessVideo) {
+      state.player.source = {
+        type: 'video',
+        sources: [{ src: url, type: file.type || 'video/mp4' }],
+        tracks: plyrTracks
+      };
+      
+      const onReady = () => {
+        state.player.off('ready', onReady);
         const dur = state.player.duration;
         if (dur && dur > 0) {
           ensureProgress(state.currentCourse);
@@ -118,22 +129,66 @@ export async function loadFile(entry) {
         try { state.player.play(); } catch(e){}
         setupPeek(url);
         setupAutoProceed();
-      });
-      state.player.on('timeupdate', () => {
-        setPos(state.currentCourse, entry.path, state.player.currentTime, state.player.duration);
-      });
-      state.player.on('pause', () => {
-        if (onSaveProgress) onSaveProgress(state.currentCourse);
-      });
-      state.player.on('ended', () => {
-        setDone(state.currentCourse, entry.path, true);
-        if (onSaveProgress) onSaveProgress(state.currentCourse);
-        triggerAutoProceed(true);
-      });
+      };
+      state.player.on('ready', onReady);
+      
+      // Start save timer again
       state.saveTimer = setInterval(() => {
         if (state.player && state.player.playing && onSaveProgress) onSaveProgress(state.currentCourse);
       }, 6000);
-      state.player.on('destroy', () => { if (state.saveTimer) clearInterval(state.saveTimer); state.saveTimer = null; });
+
+    } else {
+      viewerWrap.innerHTML = `
+        <div class="w-full flex items-center justify-center p-3 md:p-6 animate-fade-in">
+          <div class="w-full max-w-[96vw] md:max-w-[88vw] aspect-video relative" style="max-height:calc(100vh - 3.5rem)">
+            <video id="lumina-video" controls crossorigin playsinline class="w-full h-full" preload="metadata" ${autoplay ? 'autoplay' : ''}>
+              <source src="${url}" type="${file.type || 'video/mp4'}">
+              ${tracksHtml}
+            </video>
+          </div>
+        </div>`;
+
+      if (window.Plyr) {
+        state.player = new Plyr('#lumina-video', {
+          controls: ['play-large','play','progress','current-time','mute','volume','captions','settings','pip','airplay','fullscreen'],
+          tooltips: { controls: true, seek: false },
+          settings: ['captions','quality','speed'],
+          speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5] },
+          keyboard: { focused: true, global: true }
+        });
+        state.player.on('ready', () => {
+          const dur = state.player.duration;
+          if (dur && dur > 0) {
+            ensureProgress(state.currentCourse);
+            const path = state.currentFile.path;
+            if (!state.currentCourse.progress.files[path]) state.currentCourse.progress.files[path] = {};
+            state.currentCourse.progress.files[path].duration = dur;
+          }
+          const savedPos = state.currentCourse.progress?.files?.[state.currentFile.path]?.position || 0;
+          if (savedPos > 0 && savedPos < (dur || Infinity)) {
+            state.player.currentTime = savedPos;
+          }
+          try { state.player.play(); } catch(e){}
+          if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
+          setupPeek(state.activeBlobUrl);
+          setupAutoProceed();
+        });
+        state.player.on('timeupdate', () => {
+          setPos(state.currentCourse, state.currentFile.path, state.player.currentTime, state.player.duration);
+        });
+        state.player.on('pause', () => {
+          if (onSaveProgress) onSaveProgress(state.currentCourse);
+        });
+        state.player.on('ended', () => {
+          setDone(state.currentCourse, state.currentFile.path, true);
+          if (onSaveProgress) onSaveProgress(state.currentCourse);
+          triggerAutoProceed(true);
+        });
+        state.saveTimer = setInterval(() => {
+          if (state.player && state.player.playing && onSaveProgress) onSaveProgress(state.currentCourse);
+        }, 6000);
+        state.player.on('destroy', () => { if (state.saveTimer) clearInterval(state.saveTimer); state.saveTimer = null; });
+      }
     }
 
   } else if (entry.type === 'pdf') {
@@ -224,7 +279,7 @@ function triggerAutoProceed(fromEnd = false) {
   const next = idx >= 0 && idx < c.flatFiles.length - 1 ? c.flatFiles[idx + 1] : null;
   if (!next) return;
 
-  const shell = document.getElementById('viewer-wrap');
+  const shell = document.querySelector('.plyr') || document.getElementById('viewer-wrap');
   if (!shell) return;
   let seconds = 3;
   const div = document.createElement('div');
@@ -287,8 +342,7 @@ function setupPeek(url) {
   tooltip.className = 'seek-peek-tooltip';
   tooltip.style.display = 'none';
   tooltip.innerHTML = `<canvas id="peek-canvas" width="160" height="90"></canvas><div class="peek-time">00:00</div>`;
-  const plyrContainer = document.querySelector('.plyr') || document.body;
-  plyrContainer.appendChild(tooltip);
+  progressEl.appendChild(tooltip);
 
   const canvas = tooltip.querySelector('#peek-canvas');
   const ctx = canvas.getContext('2d');
@@ -312,10 +366,12 @@ function setupPeek(url) {
     pendingTime = time;
 
     tooltip.style.display = 'block';
-    const tx = Math.max(90, Math.min(window.innerWidth - 90, clientX));
-    const ty = rect.top - 10;
+    
+    // Bounds check to ensure tooltip stays inside the progress bar width bounds
+    const tx = Math.max(80, Math.min(rect.width - 80, x));
+    
     tooltip.style.left = tx + 'px';
-    tooltip.style.top = (ty < 4 ? 4 : ty) + 'px';
+    tooltip.style.top = '0px';
     tooltip.querySelector('.peek-time').textContent = fmtTime(time);
 
     clearTimeout(seekTimeout);
