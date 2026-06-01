@@ -22,6 +22,8 @@ export const state = {
   pdfPage: 1,
   pdfScale: 1.5,
   _peekCleanup: null,
+  playbackSpeedCache: {},
+  environmentWarningDismissed: false,
   
   // Gamification & User
   user: {

@@ -278,11 +278,20 @@ function clamp(num, min, max) {
   return Math.max(min, Math.min(max, num));
 }
 
+function roundSpeed(speed) {
+  return Math.round(clamp(speed, 0.5, 3.5) * 10) / 10;
+}
+
 function currentPlaybackSpeed() {
   const mediaRate = state.player?.media?.playbackRate;
   const playerRate = state.player?.speed;
   const rate = Number.isFinite(mediaRate) ? mediaRate : playerRate;
   return Number.isFinite(rate) && rate > 0 ? rate : 1;
+}
+
+function getPlaybackSpeedCache() {
+  if (!state.playbackSpeedCache) state.playbackSpeedCache = {};
+  return state.playbackSpeedCache;
 }
 
 function scheduleFeedbackRemoval(el, ms = 900) {
@@ -327,7 +336,7 @@ function showSeekFeedback(seconds) {
 
 export function setPlaybackSpeed(speed, showFeedback = true) {
   if (!state.player) return;
-  const next = Math.round(clamp(speed, 0.5, 3.5) * 10) / 10;
+  const next = roundSpeed(speed);
   try { state.player.speed = next; } catch(e) {}
   if (state.player.media) state.player.media.playbackRate = next;
   if (showFeedback) showSpeedFeedback(next);
@@ -335,6 +344,28 @@ export function setPlaybackSpeed(speed, showFeedback = true) {
 
 export function adjustPlaybackSpeed(delta) {
   setPlaybackSpeed(currentPlaybackSpeed() + delta);
+}
+
+export function toggleFixedPlaybackSpeed(targetSpeed, cacheKey = null, showFeedback = true) {
+  if (!state.player) return;
+
+  const next = roundSpeed(targetSpeed);
+  const key = cacheKey || `preset:${next.toFixed(1)}`;
+  const cache = getPlaybackSpeedCache();
+  const current = roundSpeed(currentPlaybackSpeed());
+  const cached = Number.isFinite(cache[key]) ? roundSpeed(cache[key]) : null;
+
+  if (current === next) {
+    if (cached !== null && cached !== next) {
+      setPlaybackSpeed(cached, showFeedback);
+    } else if (showFeedback) {
+      showSpeedFeedback(next);
+    }
+    return;
+  }
+
+  cache[key] = current;
+  setPlaybackSpeed(next, showFeedback);
 }
 
 export function seekBy(seconds) {

@@ -202,6 +202,19 @@ function renderHeatmap(state) {
 export function renderDashboard(app) {
   cleanupMedia();
   const stats = computeDashboardStats();
+  const envWarning = state.environmentWarning && !state.environmentWarningDismissed ? `
+    <div class="mb-6 glass-panel rounded-2xl p-4 md:p-5 border border-amber-400/20 bg-amber-500/10">
+      <div class="flex items-start gap-3">
+        <div class="mt-0.5 w-8 h-8 rounded-full bg-amber-400/15 text-amber-300 flex items-center justify-center font-black shrink-0">!</div>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-semibold text-amber-100">Desktop browser required</div>
+          <p class="text-sm text-amber-100/80 mt-1 leading-relaxed">
+            ${escapeHtml(state.environmentWarning)}
+          </p>
+        </div>
+        <button onclick="window.dismissEnvironmentWarning()" class="p-2 rounded-lg hover:bg-white/10 text-amber-100/80 shrink-0" title="Dismiss">${Ico.close}</button>
+      </div>
+    </div>` : '';
   const coursesHtml = state.courses.map(c => {
     const p = overallCourseProgress(c);
     const durStr = p.durationTotal ? `${fmtDuration(p.durationDone)} / ${fmtDuration(p.durationTotal)}` : '';
@@ -242,9 +255,13 @@ export function renderDashboard(app) {
     <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
       <div class="relative overflow-hidden px-6 md:px-10 pt-8 md:pt-12 pb-6">
         <div class="max-w-6xl mx-auto">
+          ${envWarning}
           <div class="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
             <div>
-              <h1 class="text-4xl md:text-6xl font-extrabold text-gradient mb-3 tracking-tight cursor-pointer inline-block" onclick="window.editUsername()" title="Click to edit username">Welcome, ${escapeHtml(state.user?.name || 'Learner')}</h1>
+              <div class="flex items-center gap-3 mb-3">
+                <img src="icon-32.png" alt="" aria-hidden="true" class="w-8 h-8 md:w-10 md:h-10 rounded-lg shrink-0 shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
+                <h1 class="text-4xl md:text-6xl font-extrabold text-gradient tracking-tight cursor-pointer inline-block" onclick="window.editUsername()" title="Click to edit username">Welcome, ${escapeHtml(state.user?.name || 'Learner')}</h1>
+              </div>
               <p class="text-slate-400 text-lg md:text-xl max-w-2xl leading-relaxed">Your offline learning sanctuary. Track progress, take notes, and never lose your place.</p>
             </div>
             <div class="flex items-center gap-4 text-sm text-slate-400">

@@ -18,6 +18,7 @@ const SHELL_ASSETS = [
   'vendor/pdfjs.worker.min.mjs',
   'vendor/pdf_viewer.css',
   'manifest.json',
+  'icon-32.png',
   'icon-192.png',
   'icon-512.png'
 ];

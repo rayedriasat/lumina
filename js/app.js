@@ -2,7 +2,26 @@ import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
 import { render, updateSidebar, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
-import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, setPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
+import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
+
+const ENV_WARNING_DISMISS_KEY = 'lumina_env_warning_dismissed';
+
+function detectEnvironmentWarning() {
+  const ua = navigator.userAgent || '';
+  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(ua) ||
+    (navigator.maxTouchPoints > 1 && window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 1024);
+  const hasFileSystemAccess = 'showDirectoryPicker' in window;
+
+  if (isMobile) {
+    return 'Lumina web is designed for desktop browsers. Mobile devices are not supported for the web version, and the folder picker needed by the app is not available there.';
+  }
+
+  if (!hasFileSystemAccess) {
+    return 'Lumina web needs a Chromium-based desktop browser with the File System Access API. Safari, Firefox, and other nonstandard browsers are not supported for this version.';
+  }
+
+  return '';
+}
 
 /* ---------- Attach globals for inline HTML handlers ---------- */
 window.pickCourseFolder = pickCourseFolder;
@@ -69,14 +88,21 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft') { e.preventDefault(); prevFile(); }
   else if (key === 'b') { e.preventDefault(); addBookmark(); }
   else if (key === '.') { e.preventDefault(); toggleComplete(); }
-  else if (key === 'g') { e.preventDefault(); setPlaybackSpeed(1.8); }
-  else if (key === 'h') { e.preventDefault(); setPlaybackSpeed(2.5); }
-  else if (key === 'y') { e.preventDefault(); setPlaybackSpeed(3.0); }
+  else if (key === 'r') { e.preventDefault(); toggleFixedPlaybackSpeed(1.0, 'r'); }
+  else if (key === 'g') { e.preventDefault(); toggleFixedPlaybackSpeed(1.8, 'g'); }
+  else if (key === 'h') { e.preventDefault(); toggleFixedPlaybackSpeed(2.5, 'h'); }
+  else if (key === 'y') { e.preventDefault(); toggleFixedPlaybackSpeed(3.0, 'y'); }
   else if (key === 's') { e.preventDefault(); adjustPlaybackSpeed(-0.1); }
   else if (key === 'd') { e.preventDefault(); adjustPlaybackSpeed(0.1); }
   else if (key === 'z') { e.preventDefault(); seekBy(-10); }
   else if (key === 'x') { e.preventDefault(); seekBy(10); }
 });
+
+window.dismissEnvironmentWarning = function() {
+  state.environmentWarningDismissed = true;
+  localStorage.setItem(ENV_WARNING_DISMISS_KEY, '1');
+  render();
+};
 
 /* ---------- Course management ---------- */
 export async function pickCourseFolder() {
@@ -332,6 +358,8 @@ if ('serviceWorker' in navigator) {
 /* ---------- Init ---------- */
 (async () => {
   initGamification();
+  state.environmentWarningDismissed = localStorage.getItem(ENV_WARNING_DISMISS_KEY) === '1';
+  state.environmentWarning = detectEnvironmentWarning();
   await loadCourses();
   render();
 })();

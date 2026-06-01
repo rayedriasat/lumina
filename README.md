@@ -2,17 +2,19 @@
 
 A self-hosted, zero-backend, glassmorphism PWA that turns your offline course folders into a beautiful, sequential learning experience with gamification elements.
 
+The web build is desktop-only. Use a Chromium-based desktop browser such as Chrome, Edge, Brave, or Opera, or use the Tauri desktop app. Mobile browsers, Safari, and Firefox are not supported for the web version because the app depends on the File System Access API.
+
 **New in v2:** Subtitle search panel, thumbnail seek peek, markdown notes, bookmarks, immersive auto-proceed, auto-play, PDF.js viewer, fixed HTML viewer, collapsible sidebar, import/export sync, responsive design, and gamification.
 
 ---
 
 ## 🚀 Quick Start
 
-> **Main Interaction Page**: The primary way to use Lumina is through the **web version** via GitHub Pages. On supported browsers (Chrome, Edge), you can install the PWA for full offline support.
+> **Main Interaction Page**: The primary way to use Lumina is through the **web version** on a desktop Chromium browser. Mobile browsers and nonstandard browsers will show a warning and should use the Tauri desktop app instead.
 
 1. Go to the GitHub Pages link (e.g. `https://username.github.io/lumina/`).
 2. Click the **install icon** in the address bar → **Install as app**.
-3. Now you have a fully functional offline desktop app!
+3. Now you have a fully functional offline desktop app.
 
 Alternatively, you can run it locally using Node.js or run the Tauri Desktop build.
 
@@ -20,7 +22,7 @@ Alternatively, you can run it locally using Node.js or run the Tauri Desktop bui
 ```bash
 node server.js
 ```
-Open **http://localhost:3321** in **Chrome** or **Edge**.
+Open **http://localhost:3321** in **Chrome** or **Edge** on desktop.
 
 ### Build Static Web Bundle
 ```bash
@@ -158,7 +160,8 @@ lumina/
 
 ## ⚠️ Known Limitations
 1. **File System Access API** is Chromium-only (Chrome, Edge, Brave, Opera). Firefox & Safari desktop will need the **Tauri** wrapper.
-2. Codecs: MKV playback depends on the browser. MP4/H.264 is safest.
+2. The GitHub Pages web build is not supported on mobile browsers.
+3. Codecs: MKV playback depends on the browser. MP4/H.264 is safest.
 
 Built for learners who own their files. 🎓
 
