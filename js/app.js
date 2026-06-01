@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
 import { render, updateSidebar, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
@@ -21,6 +21,15 @@ window.toggleMobileSidebar = toggleMobileSidebar;
 window.addBookmark = addBookmark;
 window.exportAllProgress = exportAllProgress;
 window.importAllProgress = importAllProgress;
+
+window.editUsername = function() {
+  const current = state.user?.name || 'Learner';
+  const name = prompt("Enter your new username:", current);
+  if (name !== null && name.trim().length > 0) {
+    setUsername(name.trim());
+    render();
+  }
+};
 
 /* ---------- Progress persistence ---------- */
 async function writeProgress(course) {
@@ -71,10 +80,6 @@ window.addEventListener('keydown', (e) => {
 export async function pickCourseFolder() {
   if (window.__TAURI__) {
     import('./native-fs.js').then(m => m.pickTauriFolder().then(processNativeCourse).catch(e => alert(e)));
-    return;
-  }
-  if (window.Capacitor) {
-    import('./native-fs.js').then(m => m.pickCapacitorFolder().then(processNativeCourse).catch(e => alert(e)));
     return;
   }
   
@@ -258,12 +263,15 @@ export async function removeCourse(id) {
 
 /* ---------- Sync / Export / Import ---------- */
 export function exportAllProgress() {
-  const data = state.courses.map(c => ({
-    id: c.id,
-    name: c.name,
-    addedAt: c.addedAt,
-    progress: c.progress
-  }));
+  const data = {
+    user: state.user,
+    courses: state.courses.map(c => ({
+      id: c.id,
+      name: c.name,
+      addedAt: c.addedAt,
+      progress: c.progress
+    }))
+  };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -284,9 +292,17 @@ export function importAllProgress() {
     if (!file) return;
     try {
       const text = await file.text();
-      const imported = JSON.parse(text);
+      const parsed = JSON.parse(text);
+      const importedCourses = Array.isArray(parsed) ? parsed : (parsed.courses || []);
+      
+      // Import User Gamification
+      if (parsed.user) {
+        state.user = { ...state.user, ...parsed.user };
+        localStorage.setItem('lumina_user', JSON.stringify(state.user));
+      }
+
       let merged = 0;
-      for (const item of imported) {
+      for (const item of importedCourses) {
         const local = state.courses.find(c => c.id === item.id || c.name === item.name);
         if (local) {
           local.progress = item.progress || { version: 1, files: {} };
@@ -294,7 +310,7 @@ export function importAllProgress() {
           merged++;
         }
       }
-      alert(`Merged progress for ${merged} course(s).`);
+      alert(`Merged progress for ${merged} course(s). Gamification profile updated.`);
       await loadCourses();
       render();
     } catch (e) {
@@ -306,13 +322,14 @@ export function importAllProgress() {
 
 /* ---------- Service Worker ---------- */
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js')
+  navigator.serviceWorker.register('./sw.js')
     .then(() => console.log('[Lumina] SW registered'))
     .catch(err => console.warn('[Lumina] SW failed', err));
 }
 
 /* ---------- Init ---------- */
 (async () => {
+  initGamification();
   await loadCourses();
   render();
 })();

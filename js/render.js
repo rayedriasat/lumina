@@ -141,6 +141,64 @@ window.toggleFolderMap = (courseId, path) => {
   render();
 };
 
+function renderHeatmap(state) {
+  const activity = state.user?.activity || {};
+  const today = new Date();
+  const days = [];
+  
+  for (let i = 119; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const mins = activity[dateStr] || 0;
+    days.push({ date: dateStr, mins });
+  }
+
+  let cols = [];
+  let curCol = [];
+  days.forEach((day, i) => {
+    curCol.push(day);
+    if (curCol.length === 7 || i === days.length - 1) {
+      cols.push(curCol);
+      curCol = [];
+    }
+  });
+
+  const getLevel = mins => {
+    if (mins === 0) return 'bg-slate-800/50';
+    if (mins < 30) return 'bg-indigo-900/60';
+    if (mins < 60) return 'bg-indigo-700/80';
+    if (mins < 120) return 'bg-indigo-500';
+    return 'bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.5)]';
+  };
+
+  const gridHtml = cols.map(col => `
+    <div class="flex flex-col gap-1.5">
+      ${col.map(d => `<div class="w-3 h-3 md:w-3.5 md:h-3.5 rounded-sm ${getLevel(d.mins)} transition-all hover:scale-125 cursor-help" title="${d.date}: ${Math.round(d.mins)} mins"></div>`).join('')}
+    </div>
+  `).join('');
+
+  return `
+    <div class="glass-panel rounded-2xl p-5 mb-8 overflow-hidden relative group">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3 flex items-center justify-between">
+        <span>Activity Heatmap</span>
+        <span class="text-xs font-normal text-slate-500">${Math.round((state.user?.totalMinutes || 0) / 60)} total hrs</span>
+      </h3>
+      <div class="flex items-end gap-1.5 overflow-x-auto pb-2 custom-scrollbar">
+        ${gridHtml}
+      </div>
+      <div class="flex items-center gap-2 mt-2 text-[10px] text-slate-500 justify-end">
+        <span>Less</span>
+        <div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-slate-800/50"></div>
+        <div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-indigo-900/60"></div>
+        <div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-indigo-700/80"></div>
+        <div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-indigo-500"></div>
+        <div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-sm bg-indigo-400"></div>
+        <span>More</span>
+      </div>
+    </div>`;
+}
+
 export function renderDashboard(app) {
   cleanupMedia();
   const stats = computeDashboardStats();
@@ -181,48 +239,79 @@ export function renderDashboard(app) {
   `).join('');
 
   app.innerHTML = `
-    <div class="flex-1 overflow-auto animate-fade-in">
+    <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
       <div class="relative overflow-hidden px-6 md:px-10 pt-8 md:pt-12 pb-6">
         <div class="max-w-6xl mx-auto">
-          <h1 class="text-4xl md:text-6xl font-extrabold text-gradient mb-3 tracking-tight">Lumina</h1>
-          <p class="text-slate-400 text-lg md:text-xl max-w-2xl leading-relaxed mb-8">Your offline learning sanctuary. Track progress, take notes, and never lose your place.</p>
+          <div class="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
+            <div>
+              <h1 class="text-4xl md:text-6xl font-extrabold text-gradient mb-3 tracking-tight cursor-pointer inline-block" onclick="window.editUsername()" title="Click to edit username">Welcome, ${escapeHtml(state.user?.name || 'Learner')}</h1>
+              <p class="text-slate-400 text-lg md:text-xl max-w-2xl leading-relaxed">Your offline learning sanctuary. Track progress, take notes, and never lose your place.</p>
+            </div>
+            <div class="flex items-center gap-4 text-sm text-slate-400">
+              <div class="flex flex-col items-center">
+                <span class="text-2xl font-bold text-orange-400 flex items-center gap-1">${Ico.check || '🔥'} ${state.user?.streak || 0}</span>
+                <span class="text-[10px] uppercase tracking-wider">Current Streak</span>
+              </div>
+              <div class="w-px h-10 bg-slate-700/50"></div>
+              <div class="flex flex-col items-center">
+                <span class="text-2xl font-bold text-slate-300 flex items-center gap-1">${Ico.check || '🏆'} ${state.user?.highestStreak || 0}</span>
+                <span class="text-[10px] uppercase tracking-wider">Highest Streak</span>
+              </div>
+            </div>
+          </div>
+
           <div class="flex flex-wrap gap-3 mb-8">
-            <button onclick="window.pickCourseFolder()" class="btn-primary px-5 py-3 rounded-xl font-medium flex items-center gap-2 text-sm md:text-base pulse-glow">
+            <button onclick="window.pickCourseFolder()" class="btn-primary px-5 py-3 rounded-xl font-medium flex items-center gap-2 text-sm md:text-base pulse-glow cursor-pointer transition-transform hover:scale-[1.02]">
               ${Ico.plus} Add Course Folder
             </button>
-            <button onclick="window.exportAllProgress()" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2">
+            <button onclick="window.exportAllProgress()" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2 hover:bg-white/10">
               ${Ico.download} Export All
             </button>
-            <button onclick="window.importAllProgress()" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2">
+            <button onclick="window.importAllProgress()" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2 hover:bg-white/10">
               ${Ico.upload} Import
             </button>
           </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+          
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <div class="glass-panel rounded-xl p-4 text-center"><div class="text-2xl font-bold text-white">${stats.courses}</div><div class="text-xs text-slate-400 mt-1">Courses</div></div>
             <div class="glass-panel rounded-xl p-4 text-center"><div class="text-2xl font-bold text-emerald-400">${stats.completed}</div><div class="text-xs text-slate-400 mt-1">Completed</div></div>
             <div class="glass-panel rounded-xl p-4 text-center"><div class="text-2xl font-bold text-indigo-400">${stats.notes}</div><div class="text-xs text-slate-400 mt-1">Notes</div></div>
             <div class="glass-panel rounded-xl p-4 text-center"><div class="text-2xl font-bold text-amber-400">${stats.bookmarks}</div><div class="text-xs text-slate-400 mt-1">Bookmarks</div></div>
           </div>
+          
+          ${renderHeatmap(state)}
         </div>
       </div>
+
       <div class="max-w-6xl mx-auto px-6 md:px-10 pb-10 space-y-6">
         <h2 class="text-xl font-bold text-slate-100 mb-2">Your Courses</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 md:gap-6 mb-6">
           ${coursesHtml || `<div class="text-slate-500 text-sm">No courses yet.</div>`}
         </div>
-        ${mapHtml ? `<h2 class="text-xl font-bold text-slate-100 mb-2">Progress Map</h2><div class="grid grid-cols-1 gap-5">${mapHtml}</div>` : ''}
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-6">
+        
+        ${mapHtml ? `<h2 class="text-xl font-bold text-slate-100 mb-2 mt-8">Progress Map</h2><div class="grid grid-cols-1 gap-5">${mapHtml}</div>` : ''}
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-6 mt-8">
           <div class="glass-panel rounded-2xl p-5">
             <h3 class="text-lg font-semibold text-slate-100 mb-3 flex items-center gap-2">${Ico.bookmarkFill || Ico.bookmark} Recent Bookmarks</h3>
-            <div class="max-h-64 overflow-auto pr-1 space-y-1">
+            <div class="max-h-64 overflow-auto pr-1 space-y-1 custom-scrollbar">
               ${bookmarksHtml || `<div class="text-slate-500 text-sm">No bookmarks yet.</div>`}
             </div>
           </div>
           <div class="glass-panel rounded-2xl p-5">
             <h3 class="text-lg font-semibold text-slate-100 mb-3 flex items-center gap-2">${Ico.note} Recent Notes</h3>
-            <div class="max-h-64 overflow-auto pr-1 space-y-1">
+            <div class="max-h-64 overflow-auto pr-1 space-y-1 custom-scrollbar">
               ${notesHtml || `<div class="text-slate-500 text-sm">No notes yet.</div>`}
             </div>
+          </div>
+        </div>
+
+        <!-- Footer / Authors -->
+        <div class="mt-16 pt-6 border-t border-slate-700/50 flex flex-col md:flex-row items-center justify-between text-slate-500 text-sm">
+          <p>Lumina v2 &copy; ${new Date().getFullYear()}</p>
+          <div class="flex gap-4 mt-4 md:mt-0">
+            <a href="https://github.com/rayedriasat" target="_blank" class="hover:text-indigo-400 transition-colors">GitHub</a>
+            <a href="https://www.linkedin.com/in/rayed-riasat-rabbi" target="_blank" class="hover:text-indigo-400 transition-colors">LinkedIn</a>
           </div>
         </div>
       </div>

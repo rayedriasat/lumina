@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Lumina</string>
-    <string name="title_activity_main">Lumina</string>
-    <string name="package_name">com.lumina.courseplayer</string>
-    <string name="custom_url_scheme">com.lumina.courseplayer</string>
-</resources>
