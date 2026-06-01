@@ -6,10 +6,19 @@ import { overallProgress, isDone, cleanupMedia, loadFile, renderSubtitles, toggl
 export function render() {
   const app = document.getElementById('app');
   if (!app) return;
-  if (state.view !== state.lastRenderView) {
+  if (state.view !== state.lastRenderView || state.view === 'dashboard') {
+    const dashboardScrollTop = state.view === 'dashboard' ? (app.firstElementChild?.scrollTop || 0) : 0;
+    const dashboardScrollLeft = state.view === 'dashboard' ? (app.firstElementChild?.scrollLeft || 0) : 0;
     state.lastRenderView = state.view;
     if (state.view === 'dashboard') renderDashboard(app);
     else if (state.view === 'player') renderPlayer(app);
+    if (state.view === 'dashboard') {
+      const scrollHost = app.firstElementChild;
+      if (scrollHost) {
+        scrollHost.scrollTop = dashboardScrollTop;
+        scrollHost.scrollLeft = dashboardScrollLeft;
+      }
+    }
   } else if (state.view === 'player') {
     updateSidebar(); updateTopBar(); renderSubtitles();
   }
@@ -79,7 +88,7 @@ function renderCourseMap(course) {
           const fp = folderProgress(n, course);
           const isClosed = course.collapsed.has(n.path);
           return `
-            <div class="group cursor-pointer select-none">
+            <div class="group cursor-pointer select-none" data-map-course="${escapeHtml(course.id)}" data-map-path="${escapeHtml(n.path)}">
               <div onclick="window.toggleFolderMap('${course.id}','${n.path.replace(/'/g,"\\'")}')" class="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 transition-colors">
                 <span class="folder-caret ${isClosed?'closed':'open'} text-slate-500 shrink-0">${Ico.caret}</span>
                 <span class="text-xs font-semibold text-slate-300 truncate">${escapeHtml(n.name)}</span>
@@ -90,7 +99,9 @@ function renderCourseMap(course) {
                 <span class="text-[10px] text-slate-500 font-mono shrink-0">${fp.done}/${fp.total} · ${fmtDuration(fp.durationTotal)}</span>
                 ${fp.weightedPct >= 100 ? `<span class="text-emerald-400 text-xs shrink-0">${Ico.check}</span>` : ''}
               </div>
-              ${isClosed ? '' : buildMap(n.children, depth + 1)}
+              <div data-map-children="${escapeHtml(n.path)}" class="${isClosed ? 'hidden' : ''}">
+                ${buildMap(n.children, depth + 1)}
+              </div>
             </div>`;
         } else {
           if (['srt','vtt'].includes(n.type)) return '';
@@ -136,9 +147,20 @@ window.toggleFolderMap = (courseId, path) => {
   const c = state.courses.find(x => x.id === courseId);
   if (!c) return;
   if (!c.collapsed) c.collapsed = new Set();
-  if (c.collapsed.has(path)) c.collapsed.delete(path);
+  const isClosed = c.collapsed.has(path);
+  if (isClosed) c.collapsed.delete(path);
   else c.collapsed.add(path);
-  render();
+
+  const folder = document.querySelector(`[data-map-course="${CSS.escape(courseId)}"][data-map-path="${CSS.escape(path)}"]`);
+  if (!folder) return;
+  const caret = folder.querySelector('.folder-caret');
+  const children = folder.querySelector(`[data-map-children="${CSS.escape(path)}"]`);
+
+  if (children) children.classList.toggle('hidden', !isClosed);
+  if (caret) {
+    caret.classList.toggle('closed', !isClosed);
+    caret.classList.toggle('open', isClosed);
+  }
 };
 
 function renderHeatmap(state) {
@@ -260,7 +282,15 @@ export function renderDashboard(app) {
             <div>
               <div class="flex items-center gap-3 mb-3">
                 <img src="icon-32.png" alt="" aria-hidden="true" class="w-8 h-8 md:w-10 md:h-10 rounded-lg shrink-0 shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
-                <h1 class="text-4xl md:text-6xl font-extrabold text-gradient tracking-tight cursor-pointer inline-block" onclick="window.editUsername()" title="Click to edit username">Welcome, ${escapeHtml(state.user?.name || 'Learner')}</h1>
+                <h1 class="text-4xl md:text-6xl font-extrabold text-gradient tracking-tight inline-flex items-center gap-2">
+                  <span>Welcome,</span>
+                  <span
+                    id="username-name-slot"
+                    class="inline-flex items-center rounded-lg px-1.5 py-0.5 -mx-1.5 cursor-text hover:bg-white/5 transition-colors"
+                    onclick="window.editUsername()"
+                    title="Click to edit username"
+                  >${escapeHtml(state.user?.name || 'Learner')}</span>
+                </h1>
               </div>
               <p class="text-slate-400 text-lg md:text-xl max-w-2xl leading-relaxed">Your offline learning sanctuary. Track progress, take notes, and never lose your place.</p>
             </div>
@@ -413,6 +443,10 @@ export function updateSidebar() {
   const c = state.currentCourse;
   if (!c) return;
 
+  const scrollHost = el.querySelector('#sidebar-content');
+  const scrollTop = scrollHost ? scrollHost.scrollTop : 0;
+  const scrollLeft = scrollHost ? scrollHost.scrollLeft : 0;
+
   const isMob = state.isMobile;
   if (!isMob) {
     if (state.sidebarOpen) {
@@ -521,11 +555,34 @@ export function updateSidebar() {
     }
   }
 
+  const restoredScrollHost = el.querySelector('#sidebar-content');
+  if (restoredScrollHost) {
+    restoredScrollHost.scrollTop = scrollTop;
+    restoredScrollHost.scrollLeft = scrollLeft;
+  }
+
   const overlay = document.getElementById('mobile-overlay');
   if (overlay) {
     if (isMob && state.mobileSidebarOpen) overlay.classList.remove('hidden');
     else overlay.classList.add('hidden');
   }
+}
+
+export function updateSidebarSelection(previousPath, currentPath) {
+  const clearActive = (path) => {
+    if (!path) return;
+    const prevItem = document.querySelector(`.sidebar-file[data-path="${CSS.escape(path)}"] .file-item`);
+    if (prevItem) prevItem.classList.remove('active');
+  };
+
+  const setActive = (path) => {
+    if (!path) return;
+    const nextItem = document.querySelector(`.sidebar-file[data-path="${CSS.escape(path)}"] .file-item`);
+    if (nextItem) nextItem.classList.add('active');
+  };
+
+  if (previousPath && previousPath !== currentPath) clearActive(previousPath);
+  setActive(currentPath);
 }
 
 // --- Surgical sidebar updates (no full re-render) ---
@@ -646,6 +703,8 @@ export function backToDashboard() {
   state.view = 'dashboard';
   state.currentCourse = null;
   state.currentFile = null;
+  state.editingUsername = false;
+  state.usernameDraft = '';
   state.sidebarOpen = true;
   state.mobileSidebarOpen = false;
   render();

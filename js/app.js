@@ -1,7 +1,7 @@
 import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
-import { render, updateSidebar, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
+import { render, updateSidebar, updateSidebarSelection, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
 import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
 
 const ENV_WARNING_DISMISS_KEY = 'lumina_env_warning_dismissed';
@@ -41,13 +41,76 @@ window.addBookmark = addBookmark;
 window.exportAllProgress = exportAllProgress;
 window.importAllProgress = importAllProgress;
 
+function setUsernameSlotContent(slot, value) {
+  slot.textContent = value;
+  slot.title = 'Click to edit username';
+  slot.classList.add('cursor-text');
+  slot.onclick = () => window.editUsername();
+}
+
 window.editUsername = function() {
+  const slot = document.getElementById('username-name-slot');
+  if (!slot || document.getElementById('username-input')) return;
+
   const current = state.user?.name || 'Learner';
-  const name = prompt("Enter your new username:", current);
-  if (name !== null && name.trim().length > 0) {
-    setUsername(name.trim());
-    render();
-  }
+  const input = document.createElement('input');
+  input.id = 'username-input';
+  input.value = current;
+  input.maxLength = 40;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.setAttribute('aria-label', 'Edit username');
+  input.className = 'inline-flex items-center min-w-[8ch] max-w-full rounded-lg border border-indigo-400/50 bg-slate-950/70 px-2 py-0.5 leading-none outline-none focus:border-indigo-300/70 focus:ring-2 focus:ring-indigo-500/20';
+  input.style.font = 'inherit';
+  input.style.fontSize = 'inherit';
+  input.style.fontWeight = 'inherit';
+  input.style.lineHeight = 'inherit';
+  input.style.letterSpacing = 'inherit';
+  input.style.color = 'inherit';
+
+  slot.textContent = '';
+  slot.classList.remove('cursor-text');
+  slot.removeAttribute('onclick');
+  slot.removeAttribute('title');
+  slot.appendChild(input);
+
+  const restore = (value, shouldSave) => {
+    input.removeEventListener('keydown', onKeyDown);
+    input.removeEventListener('blur', onBlur);
+    if (shouldSave) {
+      const nextName = (value || '').trim();
+      if (nextName) {
+        setUsername(nextName);
+        setUsernameSlotContent(slot, nextName);
+      } else {
+        setUsernameSlotContent(slot, current);
+      }
+    } else {
+      setUsernameSlotContent(slot, current);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      restore(input.value, true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      restore(current, false);
+    }
+  };
+
+  const onBlur = () => {
+    restore(input.value, true);
+  };
+
+  input.addEventListener('keydown', onKeyDown);
+  input.addEventListener('blur', onBlur);
+
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
 };
 
 /* ---------- Progress persistence ---------- */
@@ -66,8 +129,11 @@ window.addEventListener('lumina-toggle-done', (e) => {
   if (c) writeProgress(c);
 });
 
-window.addEventListener('lumina-file-loaded', () => {
-  updateSidebar(); updateTopBar(); renderSubtitles();
+window.addEventListener('lumina-file-loaded', (e) => {
+  const previousPath = e.detail?.previousPath || null;
+  const currentPath = e.detail?.path || state.currentFile?.path || null;
+  updateSidebarSelection(previousPath, currentPath);
+  updateTopBar(); renderSubtitles();
 });
 
 window.addEventListener('lumina-progress-updated', () => {
@@ -245,6 +311,8 @@ async function preloadMissingDurations(course) {
 export async function openCourse(id, filePath = null, seekTime = 0) {
   const course = state.courses.find(c => c.id === id);
   if (!course) return;
+  state.editingUsername = false;
+  state.usernameDraft = '';
   state.currentCourse = course;
   state.view = 'player';
   state.sidebarOpen = !state.isMobile;

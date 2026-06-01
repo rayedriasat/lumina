@@ -24,6 +24,8 @@ export const state = {
   _peekCleanup: null,
   playbackSpeedCache: {},
   environmentWarningDismissed: false,
+  editingUsername: false,
+  usernameDraft: '',
   
   // Gamification & User
   user: {

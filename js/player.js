@@ -52,6 +52,7 @@ export async function loadFile(entry) {
   if (!entry) return;
 
   const isSeamlessVideo = entry.type === 'video' && state.currentFile?.type === 'video' && state.player && window.Plyr;
+  const previousPath = state.currentFile?.path || null;
 
   if (!isSeamlessVideo) {
     cleanupMedia();
@@ -214,7 +215,9 @@ export async function loadFile(entry) {
   // Render notes for every type
   renderNotesSection(entry);
   // Update UI
-  window.dispatchEvent(new CustomEvent('lumina-file-loaded'));
+  window.dispatchEvent(new CustomEvent('lumina-file-loaded', {
+    detail: { previousPath, path: entry.path }
+  }));
 }
 
 function renderNotesSection(entry) {
