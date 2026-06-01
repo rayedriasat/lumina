@@ -170,6 +170,303 @@ body {
   display: none !important;
 }
 
+/* Player feedback overlays */
+.lumina-player-feedback,
+.lumina-speed-feedback,
+.lumina-auto-proceed {
+  pointer-events: none;
+  position: absolute;
+  z-index: 60;
+}
+
+.lumina-player-feedback {
+  inset-block: 0;
+  width: 42%;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+}
+
+.lumina-player-feedback.backward { left: 0; justify-content: flex-start; }
+.lumina-player-feedback.forward { right: 0; justify-content: flex-end; }
+
+.lumina-seek-ring {
+  width: min(17rem, 40vw);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  color: #fff;
+  background:
+    radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.12) 45%, transparent 72%),
+    rgba(15, 23, 42, 0.2);
+  border: 1px solid rgba(255,255,255,0.16);
+  box-shadow: 0 22px 70px rgba(0,0,0,0.45);
+  backdrop-filter: blur(2px);
+}
+
+.backward .lumina-seek-ring { transform: translateX(-36%) scale(0.8); }
+.forward .lumina-seek-ring { transform: translateX(36%) scale(0.8); }
+
+.lumina-seek-arrows {
+  font-size: clamp(2.2rem, 6vw, 4.5rem);
+  line-height: 0.8;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-shadow: 0 2px 18px rgba(0,0,0,0.7);
+}
+
+.lumina-seek-seconds {
+  font-size: clamp(0.9rem, 2vw, 1.2rem);
+  font-weight: 700;
+  text-shadow: 0 1px 10px rgba(0,0,0,0.75);
+}
+
+.lumina-player-feedback.is-visible {
+  animation: luminaSeekFlash 0.72s ease-out forwards;
+}
+
+@keyframes luminaSeekFlash {
+  0% { opacity: 0; }
+  16% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.lumina-speed-feedback {
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.55rem 0.75rem;
+  min-width: 5.5rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: #fff;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.lumina-speed-feedback.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.lumina-speed-feedback.is-hiding {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+
+.lumina-speed-label {
+  color: rgba(226,232,240,0.82);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.lumina-speed-feedback strong {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+/* Immersive up-next overlay */
+.lumina-auto-proceed {
+  inset: 0;
+  z-index: 70;
+  overflow: hidden;
+  color: #fff;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(239,68,68,0.16), transparent 28rem),
+    linear-gradient(90deg, rgba(0,0,0,0.92), rgba(0,0,0,0.56) 48%, rgba(0,0,0,0.88));
+  backdrop-filter: blur(4px);
+  animation: luminaNextFadeIn 0.38s ease-out forwards;
+  pointer-events: auto;
+}
+
+.lumina-next-vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 0%, rgba(0,0,0,0.2) 45%, rgba(0,0,0,0.82) 100%),
+    linear-gradient(0deg, rgba(0,0,0,0.7), transparent 48%);
+}
+
+.lumina-next-content {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(9rem, 20rem) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(1.5rem, 5vw, 4rem);
+  padding: clamp(1.2rem, 5vw, 4rem);
+}
+
+.lumina-next-play {
+  --ap-progress: 0%;
+  width: clamp(7rem, 16vw, 12rem);
+  aspect-ratio: 1;
+  justify-self: end;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  background:
+    conic-gradient(from -90deg, #ef4444 var(--ap-progress), rgba(255,255,255,0.22) var(--ap-progress)),
+    rgba(255,255,255,0.08);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.18), 0 28px 80px rgba(0,0,0,0.62);
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+.lumina-next-play:hover {
+  transform: scale(1.04);
+  filter: brightness(1.1);
+}
+
+.lumina-next-play-inner {
+  width: calc(100% - 18px);
+  height: calc(100% - 18px);
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(0,0,0,0.72);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+}
+
+.lumina-next-play-inner svg {
+  width: 42%;
+  height: 42%;
+  margin-left: 0.5rem;
+}
+
+.lumina-next-copy {
+  min-width: 0;
+  max-width: 44rem;
+}
+
+.lumina-next-eyebrow {
+  color: rgba(255,255,255,0.72);
+  font-size: clamp(0.82rem, 1.6vw, 1.05rem);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.lumina-next-eyebrow span { color: #ef4444; }
+
+.lumina-next-copy h3 {
+  margin: 0.45rem 0 1.25rem;
+  color: #fff;
+  font-size: clamp(1.6rem, 5vw, 4rem);
+  line-height: 1.05;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-shadow: 0 4px 24px rgba(0,0,0,0.6);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lumina-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.lumina-next-primary,
+.lumina-next-secondary {
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 6px;
+  padding: 0.65rem 1rem;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lumina-next-primary {
+  background: rgba(239,68,68,0.92);
+  border-color: rgba(239,68,68,0.95);
+}
+
+.lumina-next-secondary {
+  background: rgba(255,255,255,0.08);
+}
+
+.lumina-next-primary:hover,
+.lumina-next-secondary:hover {
+  filter: brightness(1.12);
+}
+
+.lumina-next-progress {
+  position: absolute;
+  left: clamp(1.2rem, 5vw, 4rem);
+  right: clamp(1.2rem, 5vw, 4rem);
+  bottom: clamp(1rem, 3vw, 2.4rem);
+  height: 3px;
+  background: rgba(255,255,255,0.18);
+  overflow: hidden;
+}
+
+.lumina-next-progress span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: #ef4444;
+  transition: width 1s linear;
+}
+
+.lumina-auto-proceed--launching {
+  animation: luminaNextLaunch 0.38s ease-in forwards;
+}
+
+.lumina-auto-proceed--launching .lumina-next-play {
+  transform: scale(2.6);
+  opacity: 0;
+  transition: transform 0.38s ease-in, opacity 0.38s ease-in;
+}
+
+.lumina-auto-proceed--launching .lumina-next-copy,
+.lumina-auto-proceed--launching .lumina-next-progress {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+@keyframes luminaNextFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes luminaNextLaunch {
+  to { opacity: 0; }
+}
+
+@media (max-width: 700px) {
+  .lumina-next-content {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+    gap: 1.25rem;
+  }
+  .lumina-next-play { justify-self: center; order: 1; }
+  .lumina-next-copy { order: 2; }
+  .lumina-next-actions { justify-content: center; }
+  .lumina-speed-feedback {
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+}
+
 /* Right panel (subtitles) */
 .right-panel {
   background: rgba(15, 23, 42, 0.7);

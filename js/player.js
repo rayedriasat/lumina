@@ -6,6 +6,8 @@ import { renderPDF } from './pdf-viewer.js';
 let onSaveProgress = null;
 export function setSaveProgress(fn) { onSaveProgress = fn; }
 
+const speedOptions = Array.from({ length: 31 }, (_, i) => Math.round((0.5 + i * 0.1) * 10) / 10);
+
 function ensureProgress(course) {
   if (!course.progress) course.progress = { version: 1, files: {} };
   if (!course.collapsed) course.collapsed = new Set();
@@ -20,8 +22,8 @@ export function cleanupMedia() {
   state.cueData = [];
   if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
   if (state.peekVideo) { state.peekVideo = null; }
-  if (state.autoProceedTimer) { clearTimeout(state.autoProceedTimer); state.autoProceedTimer = null; }
-  document.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
+  if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  document.querySelectorAll('.lumina-auto-proceed,.lumina-player-feedback,.lumina-speed-feedback').forEach(el => el.remove());
   state.noteText = '';
 }
 
@@ -153,7 +155,7 @@ export async function loadFile(entry) {
           controls: ['play-large','play','progress','current-time','mute','volume','captions','settings','pip','airplay','fullscreen'],
           tooltips: { controls: true, seek: false },
           settings: ['captions','quality','speed'],
-          speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5] },
+          speed: { selected: 1, options: speedOptions },
           keyboard: { focused: true, global: true }
         });
         state.player.on('ready', () => {
@@ -268,6 +270,81 @@ export function addBookmark() {
   window.dispatchEvent(new CustomEvent('lumina-bookmark-added'));
 }
 
+function getPlayerShell() {
+  return document.querySelector('.plyr') || document.getElementById('viewer-wrap');
+}
+
+function clamp(num, min, max) {
+  return Math.max(min, Math.min(max, num));
+}
+
+function currentPlaybackSpeed() {
+  const mediaRate = state.player?.media?.playbackRate;
+  const playerRate = state.player?.speed;
+  const rate = Number.isFinite(mediaRate) ? mediaRate : playerRate;
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
+}
+
+function scheduleFeedbackRemoval(el, ms = 900) {
+  setTimeout(() => {
+    el.classList.add('is-hiding');
+    setTimeout(() => {
+      if (el.parentNode) el.remove();
+    }, 220);
+  }, ms);
+}
+
+function showSpeedFeedback(speed) {
+  const shell = getPlayerShell();
+  if (!shell) return;
+  shell.querySelectorAll('.lumina-speed-feedback').forEach(el => el.remove());
+  const div = document.createElement('div');
+  div.className = 'lumina-speed-feedback';
+  div.innerHTML = `
+    <span class="lumina-speed-label">Speed</span>
+    <strong>${speed.toFixed(1)}x</strong>`;
+  shell.appendChild(div);
+  requestAnimationFrame(() => div.classList.add('is-visible'));
+  scheduleFeedbackRemoval(div, 1050);
+}
+
+function showSeekFeedback(seconds) {
+  const shell = getPlayerShell();
+  if (!shell) return;
+  const direction = seconds >= 0 ? 'forward' : 'backward';
+  shell.querySelectorAll(`.lumina-player-feedback.${direction}`).forEach(el => el.remove());
+  const div = document.createElement('div');
+  div.className = `lumina-player-feedback ${direction}`;
+  div.innerHTML = `
+    <div class="lumina-seek-ring">
+      <div class="lumina-seek-arrows">${seconds >= 0 ? '››' : '‹‹'}</div>
+      <div class="lumina-seek-seconds">${Math.abs(seconds)}s</div>
+    </div>`;
+  shell.appendChild(div);
+  requestAnimationFrame(() => div.classList.add('is-visible'));
+  scheduleFeedbackRemoval(div, 720);
+}
+
+export function setPlaybackSpeed(speed, showFeedback = true) {
+  if (!state.player) return;
+  const next = Math.round(clamp(speed, 0.5, 3.5) * 10) / 10;
+  try { state.player.speed = next; } catch(e) {}
+  if (state.player.media) state.player.media.playbackRate = next;
+  if (showFeedback) showSpeedFeedback(next);
+}
+
+export function adjustPlaybackSpeed(delta) {
+  setPlaybackSpeed(currentPlaybackSpeed() + delta);
+}
+
+export function seekBy(seconds) {
+  if (!state.player) return;
+  const duration = Number.isFinite(state.player.duration) && state.player.duration > 0 ? state.player.duration : Infinity;
+  const current = Number.isFinite(state.player.currentTime) ? state.player.currentTime : 0;
+  state.player.currentTime = clamp(current + seconds, 0, duration);
+  showSeekFeedback(seconds);
+}
+
 function setupAutoProceed() {
   // placeholder: actual triggering is on video end
 }
@@ -279,20 +356,29 @@ function triggerAutoProceed(fromEnd = false) {
   const next = idx >= 0 && idx < c.flatFiles.length - 1 ? c.flatFiles[idx + 1] : null;
   if (!next) return;
 
-  const shell = document.querySelector('.plyr') || document.getElementById('viewer-wrap');
+  const shell = getPlayerShell();
   if (!shell) return;
-  let seconds = 3;
+  if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  shell.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
+  let seconds = 5;
+  const totalSeconds = seconds;
   const div = document.createElement('div');
-  div.className = 'lumina-auto-proceed absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in pointer-events-auto';
+  div.className = 'lumina-auto-proceed';
   div.innerHTML = `
-    <div class="glass-panel p-6 rounded-2xl text-center max-w-sm animate-scale-in">
-      <h3 class="text-lg font-semibold text-white mb-2">Up Next</h3>
-      <p class="text-sm text-slate-300 mb-4 line-clamp-2">${escapeHtml(next.name)}</p>
-      <div class="text-3xl font-bold text-indigo-400 mb-4" id="ap-count">${seconds}</div>
-      <div class="flex gap-2 justify-center">
-        <button id="ap-cancel" class="btn-ghost px-4 py-2 rounded-lg text-sm">Cancel</button>
-        <button id="ap-now" class="btn-primary px-4 py-2 rounded-lg text-sm">Play Now</button>
+    <div class="lumina-next-vignette"></div>
+    <div class="lumina-next-content">
+      <button id="ap-now" class="lumina-next-play" style="--ap-progress:0%" title="Play next lesson">
+        <span class="lumina-next-play-inner">${Ico.play}</span>
+      </button>
+      <div class="lumina-next-copy">
+        <div class="lumina-next-eyebrow">Up next in <span id="ap-count">${seconds}</span></div>
+        <h3>${escapeHtml(next.name)}</h3>
+        <div class="lumina-next-actions">
+          <button id="ap-cancel" class="lumina-next-secondary">Cancel</button>
+          <button id="ap-now-copy" class="lumina-next-primary">Play Now</button>
+        </div>
       </div>
+      <div class="lumina-next-progress"><span id="ap-progress"></span></div>
     </div>`;
   shell.appendChild(div);
 
@@ -303,19 +389,30 @@ function triggerAutoProceed(fromEnd = false) {
   }
 
   function proceedNow() {
-    cancelProceed();
-    loadFile(next);
+    clearInterval(state.autoProceedTimer); state.autoProceedTimer = null;
+    document.removeEventListener('keydown', onEnter, true);
+    div.classList.add('lumina-auto-proceed--launching');
+    setTimeout(() => {
+      div.remove();
+      loadFile(next);
+    }, 380);
   }
 
   state.autoProceedTimer = setInterval(() => {
     seconds--;
     const num = document.getElementById('ap-count');
     if (num) num.textContent = seconds;
+    const progress = ((totalSeconds - seconds) / totalSeconds) * 100;
+    const bar = document.getElementById('ap-progress');
+    const play = div.querySelector('.lumina-next-play');
+    if (bar) bar.style.width = `${progress}%`;
+    if (play) play.style.setProperty('--ap-progress', `${progress}%`);
     if (seconds <= 0) proceedNow();
   }, 1000);
 
   div.querySelector('#ap-cancel').onclick = cancelProceed;
   div.querySelector('#ap-now').onclick = proceedNow;
+  div.querySelector('#ap-now-copy').onclick = proceedNow;
 
   function onEnter(e) {
     if (e.key === 'Enter') {

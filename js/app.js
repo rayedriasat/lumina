@@ -2,7 +2,7 @@ import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
 import { render, updateSidebar, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
-import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile } from './player.js';
+import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, setPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
 
 /* ---------- Attach globals for inline HTML handlers ---------- */
 window.pickCourseFolder = pickCourseFolder;
@@ -62,18 +62,20 @@ window.addEventListener('lumina-resize', () => {
 window.addEventListener('keydown', (e) => {
   if (state.view !== 'player') return;
   if (['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   
   const key = e.key.toLowerCase();
   if (e.key === 'ArrowRight') { e.preventDefault(); nextFile(); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); prevFile(); }
-  else if (key === 'b') { addBookmark(); }
-  else if (key === 'g') { if (state.player) state.player.speed = 1.8; }
-  else if (key === 'h') { if (state.player) state.player.speed = 2.5; }
-  else if (key === 'y') { if (state.player) state.player.speed = 3.0; }
-  else if (key === 's') { if (state.player) state.player.speed = Math.max(0.1, state.player.speed - 0.1); }
-  else if (key === 'd') { if (state.player) state.player.speed = state.player.speed + 0.1; }
-  else if (key === 'z') { if (state.player) state.player.currentTime -= 10; }
-  else if (key === 'x') { if (state.player) state.player.currentTime += 10; }
+  else if (key === 'b') { e.preventDefault(); addBookmark(); }
+  else if (key === '.') { e.preventDefault(); toggleComplete(); }
+  else if (key === 'g') { e.preventDefault(); setPlaybackSpeed(1.8); }
+  else if (key === 'h') { e.preventDefault(); setPlaybackSpeed(2.5); }
+  else if (key === 'y') { e.preventDefault(); setPlaybackSpeed(3.0); }
+  else if (key === 's') { e.preventDefault(); adjustPlaybackSpeed(-0.1); }
+  else if (key === 'd') { e.preventDefault(); adjustPlaybackSpeed(0.1); }
+  else if (key === 'z') { e.preventDefault(); seekBy(-10); }
+  else if (key === 'x') { e.preventDefault(); seekBy(10); }
 });
 
 /* ---------- Course management ---------- */
