@@ -1,5 +1,16 @@
 # Lumina — Offline Course Player v2
 
+<p align="center">
+  <video src="./lumina_walkthrough.mp4" autoplay muted loop playsinline controls poster="./assets/splash.png" style="max-width: 100%; border-radius: 16px;">
+    Your browser does not support embedded video.
+    <a href="./lumina_walkthrough.mp4">Watch the feature demo</a>.
+  </video>
+</p>
+
+<p align="center">
+  <strong>Give a star to the github repo if you loved the project.</strong>
+</p>
+
 A self-hosted, zero-backend, glassmorphism PWA that turns your offline course folders into a beautiful, sequential learning experience with gamification elements.
 
 The web build is desktop-only. Use a Chromium-based desktop browser such as Chrome, Edge, Brave, or Opera, or use the Tauri desktop app. Mobile browsers, Safari, and Firefox are not supported for the web version because the app depends on the File System Access API.
