@@ -240,6 +240,9 @@ export function renderDashboard(app) {
   const coursesHtml = state.courses.map(c => {
     const p = overallCourseProgress(c);
     const durStr = p.durationTotal ? `${fmtDuration(p.durationDone)} / ${fmtDuration(p.durationTotal)}` : '';
+    const idx = state.indexingStatus?.[c.id];
+    const isIndexing = idx && !idx.done && idx.total > 0 && idx.indexed < idx.total;
+    const indexPct = idx && idx.total > 0 ? Math.round((idx.indexed / idx.total) * 100) : 100;
     return `
       <div class="card-hover glass-panel rounded-2xl p-5 md:p-6 relative group cursor-pointer" onclick="window.openCourse('${c.id}')">
         <button onclick="event.stopPropagation(); window.removeCourse('${c.id}')" class="absolute top-3 right-3 p-2 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-red-400 transition-opacity z-10" title="Remove">${Ico.file}</button>
@@ -254,6 +257,13 @@ export function renderDashboard(app) {
           </div>
           <span class="text-sm font-medium text-slate-300 w-10 text-right">${p.weightedPct}%</span>
         </div>
+        ${isIndexing ? `<div class="mt-3 flex items-center gap-2 text-[11px] text-indigo-300/80 font-medium">
+          <span class="inline-block w-2 h-2 rounded-full bg-indigo-400 animate-pulse"></span>
+          <span>Indexing durations ${idx.indexed}/${idx.total}</span>
+          <div class="flex-1 h-1 bg-slate-700/40 rounded-full overflow-hidden ml-1">
+            <div class="h-full bg-indigo-400/80 transition-all duration-500" style="width:${indexPct}%"></div>
+          </div>
+        </div>` : ''}
       </div>`;
   }).join('');
 

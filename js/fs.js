@@ -13,6 +13,7 @@ export async function scanDirectory(dirHandle, path = '') {
   const entries = [];
   for await (const [name, handle] of dirHandle.entries()) {
     if (name === 'course-progress.json') continue;
+    if (name.startsWith('.')) continue;
     const p = path ? `${path}/${name}` : name;
     if (handle.kind === 'directory') {
       entries.push({ name, path: p, kind: 'directory', handle, children: await scanDirectory(handle, p) });

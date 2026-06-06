@@ -2,11 +2,12 @@ import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
 import { render, updateSidebar, updateSidebarSelection, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
-import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
-import { startLibraryMediaIndex, stopCourseMediaIndex, describeIndexProgress } from './media-index.js';
+import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, toggleCaptions, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
+import { startLibraryMediaIndex, stopCourseMediaIndex, describeIndexProgress, subscribeIndexingProgress } from './media-index.js';
 
 const ENV_WARNING_DISMISS_KEY = 'lumina_env_warning_dismissed';
 const indexSaveTimers = new Map();
+let dashboardRenderTimers;
 
 function detectEnvironmentWarning() {
   const ua = navigator.userAgent || '';
@@ -144,12 +145,37 @@ function startDurationIndexing() {
   startLibraryMediaIndex(state.courses, {
     onChange(course, info) {
       if (info?.changed) {
-        console.log('[Lumina]', course.name, describeIndexProgress(course));
+        console.log('[Lumina]', course.name, describeIndexProgress(course).label);
         queueIndexedProgressSave(course);
       }
     }
   });
 }
+
+subscribeIndexingProgress((course, info) => {
+  if (!course) return;
+  state.indexingStatus[course.id] = {
+    indexed: info?.indexed ?? 0,
+    total: info?.total ?? 0,
+    done: !!info?.done
+  };
+  // Avoid full re-render storms: only update when visible
+  if (state.view === 'dashboard') {
+    const stats = describeIndexProgress(course);
+    if (stats.indexed > 0) {
+      // Throttle dashboard re-renders to once per ~600ms per course.
+      const key = course.id;
+      if (!dashboardRenderTimers) dashboardRenderTimers = new Map();
+      if (dashboardRenderTimers.has(key)) return;
+      dashboardRenderTimers.set(key, setTimeout(() => {
+        dashboardRenderTimers.delete(key);
+        if (state.view === 'dashboard') render();
+      }, 600));
+    }
+  } else if (state.view === 'player' && state.currentCourse?.id === course.id) {
+    // In-player progress comes through onChange which writes & re-renders.
+  }
+});
 
 window.addEventListener('lumina-toggle-done', (e) => {
   const c = state.courses.find(x => x.id === e.detail.courseId);
@@ -171,21 +197,61 @@ window.addEventListener('lumina-resize', () => {
   if (state.view === 'player') { updateSidebar(); updateTopBar(); renderSubtitles(); }
 });
 
-function isEditableShortcutTarget(target) {
-  return !!target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
+const LUMINA_SHORTCUT_KEYS = new Set(['z','x','b','c','r','g','h','y','s','d','.','arrowleft','arrowright']);
+
+function isPlyrRangeInput(target) {
+  if (!target) return false;
+  if (target.tagName !== 'INPUT' || target.type !== 'range') return false;
+  return !!target.closest?.('.plyr');
 }
+
+function isTextInputTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  if (target.tagName === 'TEXTAREA') return true;
+  if (target.tagName === 'INPUT') {
+    const t = (target.type || 'text').toLowerCase();
+    if (t === 'range') return false;
+    if (['text','search','email','url','password','number','tel','date','time','datetime-local','month','week','color','file'].includes(t)) return true;
+    if (!t) return true;
+  }
+  if (target.isContentEditable) return true;
+  return !!target.closest?.('[contenteditable=""], [contenteditable="true"]');
+}
+
+function blurActivePlyrSlider() {
+  const active = document.activeElement;
+  if (isPlyrRangeInput(active)) {
+    try { active.blur(); } catch {}
+  }
+}
+
+// Plyr sliders (range inputs) capture arrow keys natively and steal focus
+// from our shortcuts. Blur the slider on pointerdown so keyboard focus
+// never sits on the slider; the drag still works because Plyr handles it
+// via the input's 'input' event, not via keyboard focus.
+document.addEventListener('pointerdown', (e) => {
+  if (isPlyrRangeInput(e.target)) {
+    setTimeout(blurActivePlyrSlider, 0);
+  }
+}, true);
 
 window.addEventListener('keydown', (e) => {
   if (state.view !== 'player') return;
-  if (isEditableShortcutTarget(e.target)) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-  let handled = true;
   const key = e.key.toLowerCase();
+  if (!LUMINA_SHORTCUT_KEYS.has(key)) return;
+
+  // Plyr sliders are still allowed — they're the only "input" target
+  // we want to override. Real text inputs keep their keys.
+  if (isTextInputTarget(e.target)) return;
+
+  let handled = true;
   if (e.key === 'ArrowRight') nextFile();
   else if (e.key === 'ArrowLeft') prevFile();
   else if (key === 'b') addBookmark();
-  else if (key === '.' || key === 'c') toggleComplete();
+  else if (key === '.') toggleComplete();
+  else if (key === 'c') toggleCaptions();
   else if (key === 'r') toggleFixedPlaybackSpeed(1.0, 'r');
   else if (key === 'g') toggleFixedPlaybackSpeed(1.8, 'g');
   else if (key === 'h') toggleFixedPlaybackSpeed(2.5, 'h');
@@ -199,6 +265,7 @@ window.addEventListener('keydown', (e) => {
   if (handled) {
     e.preventDefault();
     e.stopPropagation();
+    blurActivePlyrSlider();
   }
 }, true);
 
@@ -323,12 +390,17 @@ export async function openCourse(id, filePath = null, seekTime = 0) {
   if (target) {
     await loadFile(target);
     if (seekTime && target.type === 'video' && state.player) {
+      const player = state.player;
+      let fired = false;
       const seekAndPlay = () => {
-        state.player.currentTime = seekTime;
-        state.player.play();
+        if (fired) return;
+        fired = true;
+        try { player.off('ready', seekAndPlay); } catch {}
+        try { player.currentTime = seekTime; } catch {}
+        try { player.play(); } catch {}
       };
-      state.player.on('ready', seekAndPlay);
-      if (state.player.ready) {
+      player.on('ready', seekAndPlay);
+      if (player.ready) {
         seekAndPlay();
       }
     }

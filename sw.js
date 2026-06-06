@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lumina-v4';
+const CACHE_NAME = 'lumina-v5';
 const SHELL_ASSETS = [
   './',
   'index.html',
@@ -10,6 +10,8 @@ const SHELL_ASSETS = [
   'js/fs.js',
   'js/render.js',
   'js/player.js',
+  'js/media-index.js',
+  'js/native-fs.js',
   'js/pdf-viewer.js',
   'vendor/plyr.css',
   'vendor/plyr.js',

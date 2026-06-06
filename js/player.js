@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { Ico } from './icons.js';
 import { srtToVtt, parseVTT, fmtTime, mdToHtml, escapeHtml, flattenFiles, resolveDirHandle } from './fs.js';
 import { renderPDF } from './pdf-viewer.js';
-import { getPreviewThumbnails, cleanupPreviewThumbnails, warmPlaybackBuffer } from './media-index.js';
+import { getPreviewThumbnails, cleanupPreviewThumbnails, warmPlaybackBuffer, attachBufferWarmer, detachBufferWarmer, buildPlyrPreviewSource } from './media-index.js';
 
 let onSaveProgress = null;
 export function setSaveProgress(fn) { onSaveProgress = fn; }
@@ -12,6 +12,27 @@ const speedOptions = Array.from({ length: 31 }, (_, i) => Math.round((0.5 + i * 
 function ensureProgress(course) {
   if (!course.progress) course.progress = { version: 1, files: {} };
   if (!course.collapsed) course.collapsed = new Set();
+}
+
+function makePlayerSlidersNonFocusable(player) {
+  if (!player?.elements?.container) return;
+  const root = player.elements.container;
+  const apply = () => {
+    root.querySelectorAll('input[type="range"]').forEach(s => {
+      s.setAttribute('tabindex', '-1');
+      s.setAttribute('aria-hidden', 'true');
+    });
+  };
+  apply();
+  if (typeof player.once === 'function') {
+    player.once('ready', apply);
+  }
+  // Watch for any sliders Plyr re-creates later (e.g. on quality changes).
+  if (typeof MutationObserver === 'function' && !root.__luminaSliderObserver) {
+    const obs = new MutationObserver(apply);
+    obs.observe(root, { childList: true, subtree: true });
+    root.__luminaSliderObserver = obs;
+  }
 }
 
 function flushQueuedSaves() {
@@ -27,9 +48,66 @@ function flushQueuedSaves() {
   }
 }
 
+// --- Player event handlers ---
+// Defined as named functions so we can attach them with player.on()
+// and detach them with player.off() — and so a single seamless
+// source change does not end up stacking duplicates of the same
+// handler. The previous code used anonymous arrows in the non-seamless
+// branch only; when loadFile() took the seamless branch (same Plyr
+// instance, only `state.player.source = …`), progress, pause-save,
+// ended, and destroy cleanup were never wired up. That was one of the
+// sources of "playback sometimes pauses at the seeked location": the
+// player was being torn down/recreated without its listeners and a
+// stale state.player reference would still hold the old media.
+function onPlyrTimeUpdate() {
+  if (!state.player || !state.currentFile || !state.currentCourse) return;
+  setPos(state.currentCourse, state.currentFile.path, state.player.currentTime, state.player.duration);
+  queueProgressSave(state.currentCourse, 2000);
+}
+function onPlyrPause() {
+  if (onSaveProgress && state.currentCourse) onSaveProgress(state.currentCourse);
+}
+function onPlyrEnded() {
+  if (!state.currentCourse || !state.currentFile) return;
+  setDone(state.currentCourse, state.currentFile.path, true);
+  if (onSaveProgress) onSaveProgress(state.currentCourse);
+  triggerAutoProceed(true);
+}
+function onPlyrDestroy() {
+  if (state.saveTimer) { clearInterval(state.saveTimer); state.saveTimer = null; }
+  if (state.bufferWarmDetach) { try { state.bufferWarmDetach(); } catch {} state.bufferWarmDetach = null; }
+}
+
+function ensurePlayerListeners(player) {
+  if (!player || player.__luminaListeners) return;
+  player.__luminaListeners = true;
+  try {
+    player.on('timeupdate', onPlyrTimeUpdate);
+    player.on('pause', onPlyrPause);
+    player.on('ended', onPlyrEnded);
+    player.on('destroy', onPlyrDestroy);
+  } catch {}
+}
+
+function detachPlayerListeners(player) {
+  if (!player || !player.__luminaListeners) return;
+  player.__luminaListeners = false;
+  try {
+    player.off('timeupdate', onPlyrTimeUpdate);
+    player.off('pause', onPlyrPause);
+    player.off('ended', onPlyrEnded);
+    player.off('destroy', onPlyrDestroy);
+  } catch {}
+}
+
 export function cleanupMedia() {
   flushQueuedSaves();
-  if (state.player) { try { state.player.destroy(); } catch(e){} state.player = null; }
+  if (state.player) {
+    try { detachBufferWarmer(state.player); } catch {}
+    try { detachPlayerListeners(state.player); } catch {}
+    try { state.player.destroy(); } catch(e){}
+    state.player = null;
+  }
   if (state.saveTimer) { clearInterval(state.saveTimer); state.saveTimer = null; }
   if (state.activeBlobUrl) { URL.revokeObjectURL(state.activeBlobUrl); state.activeBlobUrl = null; }
   state.activeSubUrls.forEach(u => URL.revokeObjectURL(u));
@@ -37,9 +115,12 @@ export function cleanupMedia() {
   cleanupPreviewThumbnails(state.activePreviewThumbs);
   state.activePreviewThumbs = null;
   state.cueData = [];
-  if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
+  if (state._peekCleanup) { try { state._peekCleanup(); } catch {} state._peekCleanup = null; }
   if (state.peekVideo) { state.peekVideo = null; }
-  if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  if (state.autoProceedTimer) { clearTimeout(state.autoProceedTimer); clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
+  if (state.thumbJob) { state.thumbJob.cancelled = true; state.thumbJob = null; }
+  if (state.bufferWarmDetach) { try { state.bufferWarmDetach(); } catch {} state.bufferWarmDetach = null; }
   document.querySelectorAll('.lumina-auto-proceed,.lumina-player-feedback,.lumina-speed-feedback').forEach(el => el.remove());
   state.noteText = '';
 }
@@ -74,6 +155,33 @@ export function overallProgress(course) {
   return Math.round((done / course.flatFiles.length) * 100);
 }
 
+function finishVideoSetup(entry, file, savedPos) {
+  const player = state.player;
+  if (!player) return;
+  // Guard against a stale 'ready' / 'canplay' firing after the user
+  // has already navigated to a different file.
+  if (state.currentFile?.path !== entry?.path) return;
+  const dur = Number.isFinite(player.duration) && player.duration > 0 ? player.duration : 0;
+  if (dur > 0) {
+    ensureProgress(state.currentCourse);
+    if (!state.currentCourse.progress.files[entry.path]) state.currentCourse.progress.files[entry.path] = {};
+    Object.assign(state.currentCourse.progress.files[entry.path], {
+      duration: dur,
+      size: file.size || 0,
+      lastModified: file.lastModified || 0,
+      indexedAt: Date.now()
+    });
+  }
+  if (savedPos > 0 && savedPos < (dur || Infinity)) {
+    try { player.currentTime = savedPos; } catch {}
+  }
+  try { player.play(); } catch (e) {}
+  if (state.bufferWarmDetach) { try { state.bufferWarmDetach(); } catch {} }
+  state.bufferWarmDetach = attachBufferWarmer(player);
+  setupPreviewThumbnails(entry, file, dur);
+  setupAutoProceed();
+}
+
 export async function loadFile(entry) {
   if (!entry) return;
 
@@ -92,9 +200,11 @@ export async function loadFile(entry) {
     cleanupPreviewThumbnails(state.activePreviewThumbs);
     state.activePreviewThumbs = null;
     state.cueData = [];
-    if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
+    if (state._peekCleanup) { try { state._peekCleanup(); } catch {} state._peekCleanup = null; }
     if (state.peekVideo) { state.peekVideo = null; }
-    if (state.autoProceedTimer) { clearTimeout(state.autoProceedTimer); state.autoProceedTimer = null; }
+    if (state.autoProceedTimer) { clearTimeout(state.autoProceedTimer); clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+    if (state.thumbJob) { state.thumbJob.cancelled = true; state.thumbJob = null; }
+    if (state.bufferWarmDetach) { try { state.bufferWarmDetach(); } catch {} state.bufferWarmDetach = null; }
     document.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
   }
 
@@ -141,35 +251,43 @@ export async function loadFile(entry) {
     const autoplay = true;
 
     if (isSeamlessVideo) {
+      ensurePlayerListeners(state.player);
+
       state.player.source = {
         type: 'video',
         sources: [{ src: url, type: file.type || 'video/mp4' }],
         tracks: plyrTracks
       };
-      
-      const onReady = () => {
-        state.player.off('ready', onReady);
-        const dur = state.player.duration;
-        if (dur && dur > 0) {
-          ensureProgress(state.currentCourse);
-          if (!state.currentCourse.progress.files[entry.path]) state.currentCourse.progress.files[entry.path] = {};
-          Object.assign(state.currentCourse.progress.files[entry.path], {
-            duration: dur,
-            size: file.size || 0,
-            lastModified: file.lastModified || 0,
-            indexedAt: Date.now()
-          });
+
+      // Plyr's `ready` event sometimes does not re-fire after a soft
+      // source swap, which would leave the new video with no
+      // duration capture, no buffer warmer, no thumbnails, and no
+      // auto-proceed. Set up immediately if the new media is already
+      // ready; otherwise arm a 'canplay' fallback so we never miss it.
+      const tryFinish = () => {
+        const media = state.player?.media;
+        if (!media) return;
+        if (Number.isFinite(media.duration) && media.duration > 0 && media.readyState >= 1) {
+          finishVideoSetup(entry, file, savedPos);
+        } else {
+          const onCanPlay = () => {
+            try { state.player.off('canplay', onCanPlay); } catch {}
+            finishVideoSetup(entry, file, savedPos);
+          };
+          state.player.on('canplay', onCanPlay);
+          // Hard cap: if 'canplay' never fires (rare codecs), still
+          // run the setup after a short delay so the user is not
+          // stuck with a player that has no listeners.
+          setTimeout(() => {
+            if (state.currentFile?.path === entry.path && state.player?.media) {
+              try { state.player.off('canplay', onCanPlay); } catch {}
+              finishVideoSetup(entry, file, savedPos);
+            }
+          }, 2500);
         }
-        if (savedPos > 0 && savedPos < (dur || Infinity)) {
-          state.player.currentTime = savedPos;
-        }
-        try { state.player.play(); } catch(e){}
-        warmPlaybackBuffer(state.player);
-        setupPreviewThumbnails(entry, file, dur);
-        setupAutoProceed();
       };
-      state.player.on('ready', onReady);
-      
+      tryFinish();
+
       // Start save timer again
       state.saveTimer = setInterval(() => {
         if (state.player && state.player.playing && onSaveProgress) onSaveProgress(state.currentCourse);
@@ -179,7 +297,7 @@ export async function loadFile(entry) {
       viewerWrap.innerHTML = `
         <div class="w-full flex items-center justify-center p-3 md:p-6 animate-fade-in">
           <div class="w-full max-w-[96vw] md:max-w-[88vw] aspect-video relative" style="max-height:calc(100vh - 3.5rem)">
-            <video id="lumina-video" controls playsinline class="w-full h-full" preload="auto" ${autoplay ? 'autoplay' : ''}>
+            <video id="lumina-video" controls playsinline crossorigin="anonymous" class="w-full h-full" preload="auto" ${autoplay ? 'autoplay' : ''}>
               <source src="${url}" type="${file.type || 'video/mp4'}">
               ${tracksHtml}
             </video>
@@ -192,46 +310,17 @@ export async function loadFile(entry) {
           tooltips: { controls: true, seek: false },
           settings: ['captions','quality','speed'],
           speed: { selected: 1, options: speedOptions },
-          keyboard: { focused: true, global: true }
+          keyboard: { focused: true, global: true },
+          previewThumbnails: { enabled: false }
         });
+        makePlayerSlidersNonFocusable(state.player);
+        ensurePlayerListeners(state.player);
         state.player.on('ready', () => {
-          const dur = state.player.duration;
-          if (dur && dur > 0) {
-            ensureProgress(state.currentCourse);
-            const path = state.currentFile.path;
-            if (!state.currentCourse.progress.files[path]) state.currentCourse.progress.files[path] = {};
-            Object.assign(state.currentCourse.progress.files[path], {
-              duration: dur,
-              size: file.size || 0,
-              lastModified: file.lastModified || 0,
-              indexedAt: Date.now()
-            });
-          }
-          const savedPos = state.currentCourse.progress?.files?.[state.currentFile.path]?.position || 0;
-          if (savedPos > 0 && savedPos < (dur || Infinity)) {
-            state.player.currentTime = savedPos;
-          }
-          try { state.player.play(); } catch(e){}
-          warmPlaybackBuffer(state.player);
-          setupPreviewThumbnails(state.currentFile, file, dur);
-          setupAutoProceed();
-        });
-        state.player.on('timeupdate', () => {
-          setPos(state.currentCourse, state.currentFile.path, state.player.currentTime, state.player.duration);
-          queueProgressSave(state.currentCourse, 2000);
-        });
-        state.player.on('pause', () => {
-          if (onSaveProgress) onSaveProgress(state.currentCourse);
-        });
-        state.player.on('ended', () => {
-          setDone(state.currentCourse, state.currentFile.path, true);
-          if (onSaveProgress) onSaveProgress(state.currentCourse);
-          triggerAutoProceed(true);
+          finishVideoSetup(state.currentFile, file, savedPos);
         });
         state.saveTimer = setInterval(() => {
           if (state.player && state.player.playing && onSaveProgress) onSaveProgress(state.currentCourse);
         }, 6000);
-        state.player.on('destroy', () => { if (state.saveTimer) clearInterval(state.saveTimer); state.saveTimer = null; });
       }
     }
 
@@ -311,22 +400,42 @@ function saveCurrentNotes() {
 async function setupPreviewThumbnails(entry, file, duration) {
   const course = state.currentCourse;
   const path = entry?.path;
-  if (!course || !entry || !state.player || !duration) return;
+  if (!course || !entry || !state.player) return;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    // Pull a recorded duration from the course progress if we have one.
+    const recorded = course?.progress?.files?.[entry.path]?.duration;
+    if (recorded) duration = recorded;
+    else return;
+  }
+
+  // Mark the job so cleanupMedia() can cancel it if the user navigates away.
+  const job = { cancelled: false };
+  if (state.thumbJob) state.thumbJob.cancelled = true;
+  state.thumbJob = job;
 
   try {
     const bundle = await getPreviewThumbnails(course, entry, file, duration);
-    if (!bundle || state.currentFile?.path !== path || !state.player) {
+    if (job.cancelled || state.currentFile?.path !== path || !state.player) {
       cleanupPreviewThumbnails(bundle);
       return;
     }
+    if (!bundle) return;
     cleanupPreviewThumbnails(state.activePreviewThumbs);
     state.activePreviewThumbs = bundle;
-    state.player.setPreviewThumbnails({
-      enabled: true,
-      src: bundle.vttUrl
-    });
+    const src = buildPlyrPreviewSource(bundle);
+    if (!src) return;
+    try {
+      state.player.setPreviewThumbnails({
+        enabled: true,
+        src
+      });
+    } catch (err) {
+      console.warn('[Lumina] Failed to attach preview thumbnails', err);
+    }
   } catch (error) {
     console.warn('[Lumina] Preview thumbnails unavailable for', path, error);
+  } finally {
+    if (state.thumbJob === job) state.thumbJob = null;
   }
 }
 
@@ -454,9 +563,15 @@ export function seekBy(seconds) {
     state.pendingSeekTarget = null;
     const media = state.player?.media;
     if (!media || !Number.isFinite(target)) return;
-    if (typeof media.fastSeek === 'function') media.fastSeek(target);
-    else state.player.currentTime = target;
-    warmPlaybackBuffer(state.player);
+    // fastSeek seeks to the nearest keyframe — much faster than
+    // currentTime for short skips like Z/X (10s).
+    if (typeof media.fastSeek === 'function') {
+      try { media.fastSeek(target); } catch { state.player.currentTime = target; }
+    } else {
+      state.player.currentTime = target;
+    }
+    // Top-up buffer for the new position so the next Z/X is also instant.
+    setTimeout(() => { try { warmPlaybackBuffer(state.player); } catch {} }, 30);
   });
   showSeekFeedback(seconds);
 }
@@ -474,7 +589,11 @@ function triggerAutoProceed(fromEnd = false) {
 
   const shell = getPlayerShell();
   if (!shell) return;
+  // Cancel any previous auto-proceed before starting a new one. This
+  // also removes its keydown listener so we never end up with multiple
+  // capture-phase Enter listeners stacking across video transitions.
   if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
   shell.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
   let seconds = 5;
   const totalSeconds = seconds;
@@ -500,13 +619,13 @@ function triggerAutoProceed(fromEnd = false) {
 
   function cancelProceed() {
     clearInterval(state.autoProceedTimer); state.autoProceedTimer = null;
+    if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
     div.remove();
-    document.removeEventListener('keydown', onEnter, true);
   }
 
   function proceedNow() {
     clearInterval(state.autoProceedTimer); state.autoProceedTimer = null;
-    document.removeEventListener('keydown', onEnter, true);
+    if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
     div.classList.add('lumina-auto-proceed--launching');
     setTimeout(() => {
       div.remove();
@@ -537,6 +656,7 @@ function triggerAutoProceed(fromEnd = false) {
       proceedNow();
     }
   }
+  state.autoProceedKeydown = onEnter;
   document.addEventListener('keydown', onEnter, true);
 }
 
@@ -641,6 +761,12 @@ export function toggleComplete() {
   if (!c || !f) return;
   setDone(c, f.path, !isDone(c, f.path));
   window.dispatchEvent(new CustomEvent('lumina-progress-updated'));
+}
+
+export function toggleCaptions() {
+  const p = state.player;
+  if (!p || typeof p.toggleCaptions !== 'function') return;
+  try { p.toggleCaptions(); } catch {}
 }
 
 export function loadFileByPath(path) {

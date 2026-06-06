@@ -59,11 +59,14 @@ function createTauriHandle(path, name, readDir, readTextFile, convertFileSrc, is
     },
     async getFile() {
       const nativeUrl = convertFileSrc(path);
+      const stat = await readMetadata(path);
       return {
         name,
         path,
         type: mimeFromName(name),
         nativeUrl,
+        size: stat?.size ?? 0,
+        lastModified: stat?.modifiedTime ?? 0,
         async text() {
           return await readTextFile(path);
         },
@@ -76,4 +79,14 @@ function createTauriHandle(path, name, readDir, readTextFile, convertFileSrc, is
       };
     }
   };
+}
+
+async function readMetadata(path) {
+  try {
+    const { stat } = window.__TAURI__?.fs ?? {};
+    if (!stat) return null;
+    return await stat(path);
+  } catch {
+    return null;
+  }
 }

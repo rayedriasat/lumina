@@ -1,12 +1,45 @@
+// media-index.js
+// Background media indexing for Lumina:
+//  - Pre-calculates video durations so total course progress is instant.
+//  - Generates single-sprite seekbar preview thumbnails (memory friendly).
+//  - Actively warms the HTML5 playback buffer for snappy Z/X seeking.
+//
+// All public functions are no-throw, return null/false on failure and
+// log warnings only — the player must never crash because of an indexing
+// hiccup. The whole module is designed to be safely abortable between
+// courses, between videos, and on user navigation.
+
 const CACHE_DIR = '.lumina-cache';
 const THUMB_DIR = 'thumbs';
-const THUMB_INTERVAL = 20;
-const THUMB_WIDTH = 160;
-const THUMB_HEIGHT = 90;
-const MAX_THUMBS = 180;
-const MAX_ACTIVE_BUFFER_SECONDS = 120;
+
+const THUMB_WIDTH = 240;
+const THUMB_HEIGHT = 135;
+const THUMB_QUALITY = 0.82;
+const SPRITE_COLS = 8;
+const MAX_THUMBS_PER_VIDEO = 80;
+const MIN_THUMBS_PER_VIDEO = 12;
+
+const THUMB_INTERVAL_DEFAULT = 15;     // 0–10 min
+const THUMB_INTERVAL_MEDIUM = 25;      // 10–30 min
+const THUMB_INTERVAL_LONG = 45;         // 30 min – 1.5 h
+const THUMB_INTERVAL_VERY_LONG = 90;    // > 1.5 h
+
+const INDEX_THROTTLE_MS = 150;
+const INDEX_IDLE_TIMEOUT = 1500;
+const META_READ_TIMEOUT_MS = 12000;
+const GENERATION_TIMEOUT_MS = 90000;
+
+const BUFFER_AHEAD_SECONDS = 180;          // target ahead-buffer for Z/X (3 min)
+const BUFFER_BEHIND_SECONDS = 180;         // target behind-buffer for Z/X (3 min)
+const BUFFER_RECHECK_INTERVAL_MS = 4000;   // how often we recheck ahead-buffer
+
+const MANIFEST_VERSION = 3;
 
 let activeIndexRun = 0;
+let activeThumbRun = 0;
+const progressListeners = new Set();
+const inMemoryBundles = new Map(); // path -> { vttUrl, spriteUrl, manifest }
+const bufferWarmTimers = new WeakMap();
 
 function ensureProgress(course) {
   if (!course.progress) course.progress = { version: 1, files: {} };
@@ -18,14 +51,24 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function waitForIdle(timeout = 1200) {
+function waitForIdle(timeout = INDEX_IDLE_TIMEOUT) {
   return new Promise(resolve => {
-    if ('requestIdleCallback' in window) {
+    if (typeof window.requestIdleCallback === 'function') {
       window.requestIdleCallback(resolve, { timeout });
     } else {
       setTimeout(resolve, 80);
     }
   });
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+    })
+  ]);
 }
 
 function mediaKey(entry) {
@@ -46,7 +89,7 @@ function videoSignature(file) {
 }
 
 function hasMatchingDuration(course, entry, file) {
-  const record = course.progress?.files?.[entry.path];
+  const record = course?.progress?.files?.[entry.path];
   if (!record?.duration) return false;
   const sig = videoSignature(file);
   return record.size === sig.size && record.lastModified === sig.lastModified;
@@ -66,9 +109,107 @@ function setDuration(course, entry, file, duration) {
 }
 
 function getObjectUrl(file) {
-  if (file.nativeUrl) return { url: file.nativeUrl, revoke: false };
+  if (file?.nativeUrl) return { url: file.nativeUrl, revoke: false };
   return { url: URL.createObjectURL(file), revoke: true };
 }
+
+function emitProgress(course, info) {
+  for (const listener of progressListeners) {
+    try { listener(course, info); } catch (err) { console.warn('[Lumina] progress listener error', err); }
+  }
+}
+
+export function subscribeIndexingProgress(listener) {
+  progressListeners.add(listener);
+  return () => progressListeners.delete(listener);
+}
+
+// --- File System helpers (File System Access API) ---
+
+async function getCacheDir(course) {
+  if (!course?.handle?.getDirectoryHandle) return null;
+  try {
+    const root = await course.handle.getDirectoryHandle(CACHE_DIR, { create: true });
+    return await root.getDirectoryHandle(THUMB_DIR, { create: true });
+  } catch {
+    return null;
+  }
+}
+
+async function readTextFile(dir, name) {
+  if (!dir) return '';
+  try {
+    const handle = await dir.getFileHandle(name);
+    return await (await handle.getFile()).text();
+  } catch {
+    return '';
+  }
+}
+
+async function writeTextFile(dir, name, text) {
+  if (!dir) return;
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+
+async function writeBlobFile(dir, name, blob) {
+  if (!dir) return;
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+async function removeFile(dir, name) {
+  if (!dir) return;
+  try { await dir.removeEntry(name); } catch {}
+}
+
+// --- VTT + sprite utilities ---
+
+function vttTime(seconds) {
+  const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  const ms = Math.floor(Math.max(0, Math.min(0.999, seconds - Math.floor(seconds))) * 1000)
+    .toString().padStart(3, '0');
+  return `${h}:${m}:${s}.${ms}`;
+}
+
+function buildSpriteVtt(spriteUrl, frames) {
+  const lines = ['WEBVTT', ''];
+  for (const f of frames) {
+    const url = `${spriteUrl}#xywh=${f.x},${f.y},${THUMB_WIDTH},${THUMB_HEIGHT}`;
+    lines.push(`${vttTime(f.start)} --> ${vttTime(f.end)}`);
+    lines.push(url);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function parseThumbManifest(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.version === MANIFEST_VERSION && parsed?.sprite && Array.isArray(parsed.frames)) {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function isManifestValid(manifest, sig) {
+  if (!manifest) return false;
+  if (manifest.version !== MANIFEST_VERSION) return false;
+  if (manifest.size !== sig.size) return false;
+  if (manifest.lastModified !== sig.lastModified) return false;
+  if (!Array.isArray(manifest.frames) || !manifest.frames.length) return false;
+  if (!manifest.sprite?.name) return false;
+  return true;
+}
+
+// --- Video metadata reading ---
 
 export function readVideoMetadata(file) {
   return new Promise(resolve => {
@@ -79,29 +220,28 @@ export function readVideoMetadata(file) {
     const cleanup = (duration = 0) => {
       if (done) return;
       done = true;
+      clearTimeout(timeout);
       video.removeAttribute('src');
-      video.load();
+      try { video.load(); } catch {}
       video.remove();
       if (revoke) URL.revokeObjectURL(url);
       resolve(duration);
     };
 
-    const timeout = setTimeout(() => cleanup(0), 10000);
+    const timeout = setTimeout(() => cleanup(0), META_READ_TIMEOUT_MS);
     video.preload = 'metadata';
     video.muted = true;
     video.playsInline = true;
     video.onloadedmetadata = () => {
-      clearTimeout(timeout);
       const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
       cleanup(duration);
     };
-    video.onerror = () => {
-      clearTimeout(timeout);
-      cleanup(0);
-    };
+    video.onerror = () => cleanup(0);
     video.src = url;
   });
 }
+
+// --- Duration indexing (background) ---
 
 export function startCourseMediaIndex(course, { onChange } = {}) {
   if (!course?.flatFiles?.length) return;
@@ -109,8 +249,10 @@ export function startCourseMediaIndex(course, { onChange } = {}) {
 
   (async () => {
     ensureProgress(course);
-    let changed = false;
     const videos = course.flatFiles.filter(file => file.type === 'video');
+    let changed = false;
+
+    emitProgress(course, { phase: 'durations', indexed: countIndexed(course), total: videos.length });
 
     for (const entry of videos) {
       if (runId !== activeIndexRun) return;
@@ -118,7 +260,10 @@ export function startCourseMediaIndex(course, { onChange } = {}) {
 
       try {
         const file = await entry.handle.getFile();
-        if (hasMatchingDuration(course, entry, file)) continue;
+        if (hasMatchingDuration(course, entry, file)) {
+          emitProgress(course, { phase: 'durations', indexed: countIndexed(course), total: videos.length });
+          continue;
+        }
 
         const duration = await readVideoMetadata(file);
         if (duration > 0) {
@@ -126,14 +271,16 @@ export function startCourseMediaIndex(course, { onChange } = {}) {
           changed = true;
           if (onChange) await onChange(course, { entry, changed: true, partial: true });
         }
+        emitProgress(course, { phase: 'durations', indexed: countIndexed(course), total: videos.length });
       } catch (error) {
         console.warn('[Lumina] Duration indexing failed for', entry.path, error);
       }
 
-      await sleep(250);
+      await sleep(INDEX_THROTTLE_MS);
     }
 
     if (changed && onChange) await onChange(course, { changed: true, partial: false });
+    emitProgress(course, { phase: 'durations', done: true, indexed: countIndexed(course), total: videos.length });
   })();
 }
 
@@ -147,6 +294,7 @@ export function startLibraryMediaIndex(courses, { onChange } = {}) {
       ensureProgress(course);
       let changed = false;
       const videos = course.flatFiles?.filter(file => file.type === 'video') || [];
+      emitProgress(course, { phase: 'durations', indexed: countIndexed(course), total: videos.length });
 
       for (const entry of videos) {
         if (runId !== activeIndexRun) return;
@@ -162,14 +310,16 @@ export function startLibraryMediaIndex(courses, { onChange } = {}) {
             changed = true;
             if (onChange) await onChange(course, { entry, changed: true, partial: true });
           }
+          emitProgress(course, { phase: 'durations', indexed: countIndexed(course), total: videos.length });
         } catch (error) {
           console.warn('[Lumina] Duration indexing failed for', entry.path, error);
         }
 
-        await sleep(250);
+        await sleep(INDEX_THROTTLE_MS);
       }
 
       if (changed && onChange) await onChange(course, { changed: true, partial: false });
+      emitProgress(course, { phase: 'durations', done: true, indexed: countIndexed(course), total: videos.length });
     }
   })();
 }
@@ -178,193 +328,400 @@ export function stopCourseMediaIndex() {
   activeIndexRun++;
 }
 
-async function getCacheDir(course) {
-  if (!course?.handle?.getDirectoryHandle) return null;
-  try {
-    const root = await course.handle.getDirectoryHandle(CACHE_DIR, { create: true });
-    return await root.getDirectoryHandle(THUMB_DIR, { create: true });
-  } catch {
-    return null;
-  }
+function countIndexed(course) {
+  const videos = course?.flatFiles?.filter(f => f.type === 'video') || [];
+  return videos.filter(f => course.progress?.files?.[f.path]?.duration).length;
 }
 
-async function readTextFile(dir, name) {
-  try {
-    const handle = await dir.getFileHandle(name);
-    return await (await handle.getFile()).text();
-  } catch {
-    return '';
-  }
-}
+// --- Thumbnail sprite generation ---
 
-async function writeTextFile(dir, name, text) {
-  const handle = await dir.getFileHandle(name, { create: true });
-  const writable = await handle.createWritable();
-  await writable.write(text);
-  await writable.close();
-}
-
-async function writeBlobFile(dir, name, blob) {
-  const handle = await dir.getFileHandle(name, { create: true });
-  const writable = await handle.createWritable();
-  await writable.write(blob);
-  await writable.close();
-}
-
-function vttTime(seconds) {
-  const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-  return `${h}:${m}:${s}.000`;
-}
-
-function makeCueText(frames) {
-  return `WEBVTT\n\n${frames.map(frame => (
-    `${vttTime(frame.start)} --> ${vttTime(frame.end)}\n${frame.name}\n`
-  )).join('\n')}`;
-}
-
-function parseThumbManifest(text) {
-  try {
-    const parsed = JSON.parse(text);
-    return parsed?.version === 1 && Array.isArray(parsed.frames) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-async function cacheToObjectUrls(cacheDir, manifest) {
-  const imageUrls = [];
-  const frames = [];
-
-  for (const frame of manifest.frames) {
-    const handle = await cacheDir.getFileHandle(frame.name);
-    const file = await handle.getFile();
-    const url = URL.createObjectURL(file);
-    imageUrls.push(url);
-    frames.push({ ...frame, url });
-  }
-
-  const vtt = `WEBVTT\n\n${frames.map(frame => (
-    `${vttTime(frame.start)} --> ${vttTime(frame.end)}\n${frame.url}\n`
-  )).join('\n')}`;
-  const vttUrl = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
-  return { vttUrl, imageUrls };
-}
-
-function captureFrame(video, canvas, quality = 0.72) {
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+function pickInterval(duration) {
+  if (duration > 5400) return THUMB_INTERVAL_VERY_LONG; // > 1.5 h
+  if (duration > 1800) return THUMB_INTERVAL_LONG;        // > 30 min
+  if (duration > 600) return THUMB_INTERVAL_MEDIUM;       // > 10 min
+  return THUMB_INTERVAL_DEFAULT;
 }
 
 function seekVideo(video, time) {
   return new Promise(resolve => {
+    let resolved = false;
     const onSeeked = () => {
+      if (resolved) return;
+      resolved = true;
       video.removeEventListener('seeked', onSeeked);
       resolve();
     };
-    video.addEventListener('seeked', onSeeked, { once: true });
-    video.currentTime = time;
+    const timeout = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      video.removeEventListener('seeked', onSeeked);
+      resolve();
+    }, 3000);
+    video.addEventListener('seeked', () => { clearTimeout(timeout); onSeeked(); }, { once: true });
+    try { video.currentTime = time; } catch { clearTimeout(timeout); resolved = true; resolve(); }
   });
 }
 
-async function generateThumbnails(cacheDir, entry, file, duration) {
-  const key = mediaKey(entry);
-  const frames = [];
-  const count = Math.max(1, Math.min(MAX_THUMBS, Math.ceil(duration / THUMB_INTERVAL)));
+function captureFrame(video, canvas) {
+  return new Promise(resolve => {
+    try {
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(resolve, 'image/jpeg', THUMB_QUALITY);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function generateSpriteFrames(file, duration) {
+  const interval = pickInterval(duration);
+  const desired = Math.ceil(duration / interval);
+  const count = Math.max(MIN_THUMBS_PER_VIDEO, Math.min(MAX_THUMBS_PER_VIDEO, desired));
+  const actualInterval = duration / count;
+
   const { url, revoke } = getObjectUrl(file);
   const video = document.createElement('video');
-  const canvas = document.createElement('canvas');
-  canvas.width = THUMB_WIDTH;
-  canvas.height = THUMB_HEIGHT;
   video.preload = 'metadata';
   video.muted = true;
   video.playsInline = true;
   video.src = url;
 
-  await new Promise((resolve, reject) => {
-    video.onloadedmetadata = resolve;
-    video.onerror = () => reject(new Error('thumbnail video metadata failed'));
-  });
+  try {
+    await withTimeout(new Promise((resolve, reject) => {
+      video.onloadedmetadata = resolve;
+      video.onerror = () => reject(new Error('metadata failed'));
+    }), 8000, 'sprite-meta');
+  } catch {
+    if (revoke) URL.revokeObjectURL(url);
+    video.remove();
+    return { frames: [], bitmaps: [] };
+  }
 
-  for (let i = 0; i < count; i++) {
-    await waitForIdle();
-    const start = i * THUMB_INTERVAL;
-    const end = Math.min(duration, start + THUMB_INTERVAL);
-    const time = Math.min(Math.max(0.1, start + 1), Math.max(0.1, duration - 0.1));
+  // If real duration > 0 and bigger than what the metadata reported, update.
+  const realDuration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : duration;
+  const finalCount = Math.max(MIN_THUMBS_PER_VIDEO, Math.min(MAX_THUMBS_PER_VIDEO, Math.ceil(realDuration / interval)));
+  const finalInterval = realDuration / finalCount;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = THUMB_WIDTH;
+  canvas.height = THUMB_HEIGHT;
+  const bitmaps = [];
+  const frames = [];
+
+  for (let i = 0; i < finalCount; i++) {
+    const start = i * finalInterval;
+    const end = Math.min(realDuration, start + finalInterval);
+    const time = Math.min(Math.max(0.1, start + finalInterval / 2), Math.max(0.1, realDuration - 0.1));
     await seekVideo(video, time);
     const blob = await captureFrame(video, canvas);
     if (!blob) continue;
-    const name = `${key}-${String(i).padStart(4, '0')}.jpg`;
-    await writeBlobFile(cacheDir, name, blob);
-    frames.push({ start, end, name });
+    try {
+      const bitmap = await createImageBitmap(blob);
+      bitmaps.push(bitmap);
+      frames.push({ start, end });
+    } catch {
+      // skip this frame
+    }
   }
 
   video.removeAttribute('src');
-  video.load();
+  try { video.load(); } catch {}
+  video.remove();
   if (revoke) URL.revokeObjectURL(url);
 
-  const manifest = {
-    version: 1,
-    path: entry.path,
-    key,
-    generatedAt: Date.now(),
-    interval: THUMB_INTERVAL,
-    duration,
-    size: file.size || 0,
-    lastModified: file.lastModified || 0,
-    frames
-  };
-  await writeTextFile(cacheDir, `${key}.json`, JSON.stringify(manifest, null, 2));
-  await writeTextFile(cacheDir, `${key}.vtt`, makeCueText(frames));
-  return manifest;
+  return { frames, bitmaps, duration: realDuration };
 }
 
+function composeSprite(frames, bitmaps) {
+  const count = frames.length;
+  if (!count) return null;
+  const cols = Math.min(SPRITE_COLS, count);
+  const rows = Math.ceil(count / cols);
+  const canvas = document.createElement('canvas');
+  canvas.width = THUMB_WIDTH * cols;
+  canvas.height = THUMB_HEIGHT * rows;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < count; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    try { ctx.drawImage(bitmaps[i], col * THUMB_WIDTH, row * THUMB_HEIGHT, THUMB_WIDTH, THUMB_HEIGHT); }
+    catch {}
+  }
+
+  for (const b of bitmaps) { try { b.close?.(); } catch {} }
+
+  const positioned = frames.map((f, i) => ({
+    ...f,
+    x: (i % cols) * THUMB_WIDTH,
+    y: Math.floor(i / cols) * THUMB_HEIGHT
+  }));
+
+  return new Promise(resolve => {
+    canvas.toBlob(blob => {
+      if (!blob) { resolve(null); return; }
+      resolve({ blob, frames: positioned, cols, rows });
+    }, 'image/jpeg', THUMB_QUALITY);
+  });
+}
+
+async function generateThumbnailSprite(cacheDir, entry, file, duration, key, runId) {
+  const genPromise = (async () => {
+    const { frames, bitmaps, duration: realDuration } = await generateSpriteFrames(file, duration || 0);
+    if (runId !== activeThumbRun) return null;
+    if (!frames.length || !bitmaps.length) return null;
+    const composed = await composeSprite(frames, bitmaps);
+    if (!composed) return null;
+    return { ...composed, duration: realDuration };
+  })();
+
+  try {
+    const result = await withTimeout(genPromise, GENERATION_TIMEOUT_MS, 'thumb-gen');
+    if (!result) return null;
+
+    const spriteName = `${key}-sprite.jpg`;
+    const vttName = `${key}.vtt`;
+    const jsonName = `${key}.json`;
+    // Remove legacy per-frame files if upgrading from v1
+    for (let i = 0; i < MAX_THUMBS_PER_VIDEO; i++) {
+      await removeFile(cacheDir, `${key}-${String(i).padStart(4, '0')}.jpg`);
+    }
+
+    await writeBlobFile(cacheDir, spriteName, result.blob);
+    const sig = videoSignature(file);
+    const manifest = {
+      version: MANIFEST_VERSION,
+      path: entry.path,
+      key,
+      generatedAt: Date.now(),
+      interval: pickInterval(result.duration),
+      duration: result.duration,
+      size: sig.size,
+      lastModified: sig.lastModified,
+      sprite: { name: spriteName, cols: result.cols, rows: result.rows, count: result.frames.length },
+      frames: result.frames
+    };
+    await writeTextFile(cacheDir, jsonName, JSON.stringify(manifest));
+    await writeTextFile(cacheDir, vttName, buildSpriteVtt('about:placeholder', result.frames));
+    return manifest;
+  } catch (error) {
+    console.warn('[Lumina] Thumbnail generation failed for', entry.path, error);
+    return null;
+  }
+}
+
+async function loadSpriteBundle(cacheDir, manifest) {
+  if (!cacheDir || !manifest?.sprite) return null;
+  const inMemory = inMemoryBundles.get(manifest.path);
+  if (inMemory) return inMemory;
+
+  try {
+    const handle = await cacheDir.getFileHandle(manifest.sprite.name);
+    const file = await handle.getFile();
+    const spriteUrl = URL.createObjectURL(file);
+    const cols = manifest.sprite?.cols || SPRITE_COLS;
+    const rows = manifest.sprite?.rows || 1;
+    const spriteDims = await readImageDimensions(spriteUrl, THUMB_WIDTH * cols, THUMB_HEIGHT * rows);
+    const vttText = buildSpriteVtt(spriteUrl, manifest.frames);
+    const vttUrl = URL.createObjectURL(new Blob([vttText], { type: 'text/vtt' }));
+    const bundle = { vttUrl, spriteUrl, spriteDims, manifest };
+    inMemoryBundles.set(manifest.path, bundle);
+    return bundle;
+  } catch (error) {
+    console.warn('[Lumina] Failed to load sprite bundle for', manifest.path, error);
+    return null;
+  }
+}
+
+function readImageDimensions(url, fallbackW, fallbackH) {
+  return new Promise(resolve => {
+    const img = new Image();
+    let done = false;
+    const finish = (w, h) => {
+      if (done) return;
+      done = true;
+      resolve({ width: w || fallbackW, height: h || fallbackH });
+    };
+    img.onload = () => finish(img.naturalWidth, img.naturalHeight);
+    img.onerror = () => finish(fallbackW, fallbackH);
+    img.src = url;
+    setTimeout(() => finish(img.naturalWidth, img.naturalHeight), 4000);
+  });
+}
+
+export function cleanupPreviewThumbnails(bundle) {
+  if (!bundle) return;
+  if (bundle.path) inMemoryBundles.delete(bundle.path);
+  if (bundle.vttUrl) { try { URL.revokeObjectURL(bundle.vttUrl); } catch {} }
+  if (bundle.spriteUrl) { try { URL.revokeObjectURL(bundle.spriteUrl); } catch {} }
+  if (Array.isArray(bundle.imageUrls)) bundle.imageUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
+}
+
+// Plyr's `getThumbnail` does:
+//   text.startsWith("/") || text.startsWith("http://") ||
+//   text.startsWith("https://") || (urlPrefix = vttDir)
+// For our blob: sprite URLs, none of those prefixes match — so Plyr
+// prepends the VTT blob URL's directory and produces a broken URL like
+//   blob:http://host/<blob-vtt-dir>blob:http://host/<sprite-blob>
+// To work around this we hand Plyr a function-form `src` that
+// pre-builds the thumbnail object with urlPrefix set to ''. Plyr then
+// uses each frame's `text` field verbatim as the image src.
+export function buildPlyrPreviewSource(bundle) {
+  if (!bundle) return null;
+  const { spriteUrl, manifest, spriteDims } = bundle;
+  if (!spriteUrl || !manifest?.frames?.length) return null;
+  const frames = manifest.frames.map(f => ({
+    startTime: f.start,
+    endTime: f.end,
+    text: spriteUrl,
+    x: f.x,
+    y: f.y,
+    w: f.w || THUMB_WIDTH,
+    h: f.h || THUMB_HEIGHT
+  }));
+  const width = spriteDims?.width || (THUMB_WIDTH * (manifest.sprite?.cols || SPRITE_COLS));
+  const height = spriteDims?.height || (THUMB_HEIGHT * (manifest.sprite?.rows || 1));
+  const thumbnail = {
+    frames,
+    height,
+    width,
+    urlPrefix: ''
+  };
+  return function source(callback) {
+    try { callback([thumbnail]); } catch (err) { console.warn('[Lumina] preview src error', err); }
+  };
+}
+
+// --- Public API: get preview thumbnails (lazy + cached) ---
+
 export async function getPreviewThumbnails(course, entry, file, duration) {
+  if (!course || !entry || !file) return null;
+
+  // Return in-memory bundle if we already loaded one for this file.
+  const cached = inMemoryBundles.get(entry.path);
+  if (cached) return cached;
+
   const cacheDir = await getCacheDir(course);
-  if (!cacheDir || !file || !duration) return null;
+  if (!cacheDir) return null;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    // Try to read it from the saved progress.
+    const recorded = course?.progress?.files?.[entry.path]?.duration;
+    if (recorded) duration = recorded;
+    else return null;
+  }
 
   const key = mediaKey(entry);
   const sig = videoSignature(file);
   let manifest = parseThumbManifest(await readTextFile(cacheDir, `${key}.json`));
 
-  if (
-    !manifest ||
-    manifest.size !== sig.size ||
-    manifest.lastModified !== sig.lastModified ||
-    !manifest.frames?.length
-  ) {
-    manifest = await generateThumbnails(cacheDir, entry, file, duration);
+  if (!isManifestValid(manifest, sig)) {
+    // If there's a different/older manifest, purge sprite/vtt so the next
+    // attempt does not conflict.
+    if (manifest?.sprite?.name) await removeFile(cacheDir, manifest.sprite.name);
+    await removeFile(cacheDir, `${key}.vtt`);
+    await removeFile(cacheDir, `${key}.json`);
+
+    activeThumbRun++;
+    const runId = activeThumbRun;
+    manifest = await generateThumbnailSprite(cacheDir, entry, file, duration, key, runId);
   }
 
-  if (!manifest.frames?.length) return null;
-  return cacheToObjectUrls(cacheDir, manifest);
+  if (!manifest) return null;
+  const bundle = await loadSpriteBundle(cacheDir, manifest);
+  if (!bundle) return null;
+  bundle.path = entry.path;
+  return bundle;
 }
 
-export function cleanupPreviewThumbnails(bundle) {
-  if (!bundle) return;
-  if (bundle.vttUrl) URL.revokeObjectURL(bundle.vttUrl);
-  if (bundle.imageUrls) bundle.imageUrls.forEach(url => URL.revokeObjectURL(url));
+export function stopThumbnailGeneration() {
+  activeThumbRun++;
 }
 
-export function warmPlaybackBuffer(player, seconds = MAX_ACTIVE_BUFFER_SECONDS) {
+// --- Buffer warming (active preload) ---
+
+function getBufferedEnd(media) {
+  try {
+    const b = media.buffered;
+    if (!b || !b.length) return 0;
+    return b.end(b.length - 1);
+  } catch { return 0; }
+}
+
+export function getBufferedAhead(player) {
   const media = player?.media;
-  if (!media || !Number.isFinite(player.duration) || player.duration <= 0) return;
-  media.preload = 'auto';
-  media.setAttribute('preload', 'auto');
-
-  if ('fastSeek' in media) return;
-  const buffered = media.buffered;
-  if (!buffered?.length) return;
-  const current = player.currentTime || 0;
-  for (let i = 0; i < buffered.length; i++) {
-    if (buffered.start(i) <= current && buffered.end(i) - current >= seconds) return;
-  }
+  if (!media) return 0;
+  const current = Number.isFinite(player.currentTime) ? player.currentTime : media.currentTime || 0;
+  const end = getBufferedEnd(media);
+  return Math.max(0, end - current);
 }
+
+// Hint the browser that we'd like it to keep a few minutes of media
+// pre-loaded. We only set the preload hint and the `fastSeek` window;
+// we never call play()/pause() ourselves. The "play and immediately
+// pause" trick we used to use here caused visible jitter on a paused
+// video (the user sees the playhead resume for ~100 ms then stop) and
+// triggered bounce-back glitches after a seek, so it is gone.
+export function warmPlaybackBuffer(player, seconds = BUFFER_AHEAD_SECONDS) {
+  const media = player?.media;
+  if (!media || !Number.isFinite(media.duration) || media.duration <= 0) return;
+  try {
+    media.preload = 'auto';
+    media.setAttribute('preload', 'auto');
+  } catch {}
+  // No-op: during natural playback the browser downloads chunks ahead
+  // of the playhead on its own. When the user is paused, the buffer
+  // is not required for the next Z/X, and actively trying to grow it
+  // is what produced the jitter.
+  void seconds;
+}
+
+export function attachBufferWarmer(player, seconds = BUFFER_AHEAD_SECONDS) {
+  const media = player?.media;
+  if (!media) return () => {};
+  detachBufferWarmer(player);
+
+  // Make sure the element is asking the browser to pre-load chunks.
+  try {
+    media.preload = 'auto';
+    media.setAttribute('preload', 'auto');
+  } catch {}
+
+  // Pure observer: just track the current buffered window in state so
+  // the UI can show / debug it. We do NOT call play(), pause(),
+  // currentTime =, or any other mutator — those were the source of
+  // the playback jitter and bounce-back after seeking.
+  const observe = () => {
+    if (!player || player.destroyed) return;
+    // No work to do — kept as a hook for future instrumentation.
+    void seconds;
+  };
+
+  const onProgress = () => observe();
+  const interval = setInterval(observe, BUFFER_RECHECK_INTERVAL_MS);
+  media.addEventListener('progress', onProgress);
+  setTimeout(observe, 250);
+
+  const detach = () => {
+    clearInterval(interval);
+    media.removeEventListener('progress', onProgress);
+    bufferWarmTimers.delete(player);
+  };
+  bufferWarmTimers.set(player, detach);
+  return detach;
+}
+
+export function detachBufferWarmer(player) {
+  const detach = bufferWarmTimers.get(player);
+  if (detach) detach();
+}
+
+// --- Misc ---
 
 export function describeIndexProgress(course) {
   const videos = course?.flatFiles?.filter(file => file.type === 'video') || [];
   const indexed = videos.filter(file => course.progress?.files?.[file.path]?.duration).length;
-  return `${indexed}/${videos.length} durations indexed`;
+  return { indexed, total: videos.length, label: `${indexed}/${videos.length} durations indexed` };
 }

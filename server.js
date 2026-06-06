@@ -60,9 +60,22 @@ const server = http.createServer((req, res) => {
           'Accept-Ranges': 'bytes',
           'Content-Length': chunkSize,
           'Content-Type': contentType,
-          'Cache-Control': 'no-cache'
+          'Cache-Control': 'no-cache',
+          'Access-Control-Allow-Origin': '*'
         });
         fs.createReadStream(filePath, { start, end }).pipe(res);
+        return;
+      }
+
+      if (req.method === 'HEAD') {
+        res.writeHead(200, {
+          'Accept-Ranges': 'bytes',
+          'Content-Length': stat.size,
+          'Content-Type': contentType,
+          'Cache-Control': 'no-cache',
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end();
         return;
       }
 
@@ -70,7 +83,8 @@ const server = http.createServer((req, res) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': stat.size,
         'Content-Type': contentType,
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*'
       });
       fs.createReadStream(filePath).pipe(res);
       return;

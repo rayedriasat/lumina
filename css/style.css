@@ -498,3 +498,53 @@ body {
 
 /* Utility */
 .select-none { user-select: none; -webkit-user-select: none; }
+
+/* Plyr preview thumbnail polish (Lumina glass theme).
+   Note: Plyr uses BEM double-underscore for nested elements but the
+   scrubbing container is its own top-level class, not nested under
+   __preview-thumb. The hover tooltip is .plyr__preview-thumb. */
+.plyr__preview-thumb {
+  background: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: none;
+  z-index: 30;
+}
+.plyr__preview-thumb__image-container {
+  background: #0b0f19 !important;
+  overflow: hidden;
+}
+.plyr__preview-thumb__time-container {
+  background: linear-gradient(0deg, rgba(0,0,0,0.7), rgba(0,0,0,0)) !important;
+}
+.plyr__preview-thumb__time-container span {
+  color: #fff !important;
+  font-weight: 600;
+}
+
+/* While the user is actively dragging the seekbar we want the
+   actual video frame to show in the player, not the large scrubbing
+   preview. We keep the hover tooltip intact — it is rendered by
+   the .plyr__preview-thumb class above. */
+.plyr__preview-scrubbing,
+.plyr__preview-scrubbing--is-shown {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Make Plyr sliders visually non-focusable so the OS focus ring
+   doesn't appear after a click. Drag still works because Plyr uses
+   the input's 'input' event, not keyboard focus. */
+.plyr input[type="range"]:focus,
+.plyr input[type="range"]:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Plyr progress buffer bar (visible to user) */
+.plyr--video .plyr__progress__buffer {
+  color: rgba(255,255,255,0.32);
+}

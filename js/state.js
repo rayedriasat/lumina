@@ -31,7 +31,11 @@ export const state = {
   environmentWarningDismissed: false,
   editingUsername: false,
   usernameDraft: '',
-  
+  bufferWarmDetach: null,
+  thumbJob: null,
+  indexingStatus: {},
+  autoProceedKeydown: null,
+
   // Gamification & User
   user: {
     name: 'Learner',
