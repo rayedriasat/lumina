@@ -1,4 +1,4 @@
-# Lumina — Offline Course Player v2
+# Lumina — Offline Course Player
 
 <p align="center">
   <a href="https://rayedriasat.github.io/lumina/">
@@ -7,96 +7,108 @@
 </p>
 
 <p align="center">
-  <a href="https://rayedriasat.github.io/lumina/"><strong>Live demo: rayedriasat.github.io/lumina</strong></a>
+  <a href="https://rayedriasat.github.io/lumina/"><strong>▶ Live demo — rayedriasat.github.io/lumina</strong></a>
 </p>
 
 <p align="center">
-  <strong>Give a star to the github repo if you loved the project.</strong>
+  <em>A self-hosted, zero-backend, glassmorphism PWA that turns your offline course folders into a beautiful, sequential learning experience — with notes, bookmarks, subtitles, and gamification.</em>
 </p>
 
-A self-hosted, zero-backend, glassmorphism PWA that turns your offline course folders into a beautiful, sequential learning experience with gamification elements.
+<p align="center">
+  ⭐ <strong>If Lumina helps you learn, please star the repo.</strong>
+</p>
 
-The web build is desktop-only. Use a Chromium-based desktop browser such as Chrome, Edge, Brave, or Opera, or use the Tauri desktop app. Mobile browsers, Safari, and Firefox are not supported for the web version because the app depends on the File System Access API.
+---
 
-**New in v2:** Subtitle search panel, thumbnail seek peek, markdown notes, bookmarks, immersive auto-proceed, auto-play, PDF.js viewer, fixed HTML viewer, collapsible sidebar, import/export sync, responsive design, and gamification.
+## Table of Contents
+
+- [What is Lumina?](#what-is-lumina)
+- [Quick Start](#-quick-start)
+- [Course Folder Requirements](#-course-folder-requirements)
+- [Features](#-features)
+- [Keyboard Shortcuts](#️-keyboard-shortcuts)
+- [Architecture](#️-architecture)
+- [Project Structure](#️-project-structure)
+- [Progress & Sync](#-progress--sync)
+- [Building & Releasing](#-building--releasing)
+- [Browser Support & Limitations](#️-browser-support--limitations)
+- [Privacy](#-privacy)
+
+---
+
+## What is Lumina?
+
+Lumina plays course folders **directly from your disk** — no upload, no server, no account. It reads the folder you pick using the browser's File System Access API, presents your lessons as an ordered, trackable curriculum, and writes progress back into the folder itself as `course-progress.json`. Your files never leave your machine.
+
+> **Best experienced on a Chromium-based desktop browser** (Chrome, Edge, Brave, Opera) or the Tauri desktop app. Safari, Firefox, and mobile browsers lack the File System Access API the web version depends on, and will show a guidance warning.
 
 ---
 
 ## 🚀 Quick Start
 
-> **Main Interaction Page**: The primary way to use Lumina is through the **web version** on a desktop Chromium browser. Mobile browsers and nonstandard browsers will show a warning and should use the Tauri desktop app instead.
+### Option 1 — Install the PWA (recommended)
 
-1. Go to the GitHub Pages link: `https://rayedriasat.github.io/lumina/`.
+1. Open **[rayedriasat.github.io/lumina](https://rayedriasat.github.io/lumina/)** in Chrome or Edge on desktop.
 2. Click the **install icon** in the address bar → **Install as app**.
-3. Now you have a fully functional offline desktop app.
+3. You now have a fully offline desktop app. Click **Add Course**, pick a folder, and start learning.
 
-Alternatively, you can run it locally using Node.js or run the Tauri Desktop build.
+### Option 2 — Run locally
 
-### Run Locally (Dev)
 ```bash
 node server.js
 ```
-Open **http://localhost:3321** in **Chrome** or **Edge** on desktop.
 
-### Build Static Web Bundle
-```bash
-npm run build
-```
-This creates a deployable `dist/` folder for static hosting.
+Then open **http://localhost:3321** in Chrome or Edge.
 
-### Course Folder Requirements
-Lumina reads the folder you choose directly from your machine. A course can contain nested folders and mixed lesson files:
+### Option 3 — Native desktop app (Tauri)
 
-- Videos: `.mp4`, `.webm`, browser-supported media files
-- Subtitles: `.srt` or `.vtt` next to the matching video file
-- Documents: `.pdf`
-- Web lessons: `.html`
-- Images: common browser-supported image formats
-
-Progress is written back to `course-progress.json` in the selected course folder, so the app needs read/write permission for that folder.
+See [Building & Releasing](#-building--releasing) to produce a Windows `.exe` / `.msi`. This is the way to use Lumina on Firefox/Safari machines.
 
 ---
 
-## 🏗️ Architecture
+## 📂 Course Folder Requirements
 
-| Layer | Technology |
-|---|---|
-| **UI** | Vanilla JS (ES modules) + Tailwind CSS |
-| **Video** | Plyr.io (speeds up to 3.5x, captions, PiP, fullscreen) |
-| **Subtitles** | Auto-detects `.srt`/`.vtt`, converts SRT→WebVTT, searchable cue panel |
-| **PDF** | Mozilla PDF.js custom canvas viewer |
-| **HTML** | Sandboxed iframe with isolated white background |
-| **Progress** | `course-progress.json` inside each course folder |
-| **Storage** | IndexedDB (folder handles) + per-course JSON |
-| **Offline** | Service Worker caches the full app shell |
+Point Lumina at any folder. It scans nested subfolders and orders lessons naturally (so `Lesson 2` sorts before `Lesson 10`). Supported lesson types:
+
+| Type | Extensions | Notes |
+|---|---|---|
+| **Video** | `.mp4`, `.webm`, `.ogg`, `.ogv`, `.mov`, `.mkv` | `.mp4` (H.264) is the most reliable; MKV depends on the browser. |
+| **Subtitles** | `.srt`, `.vtt` | Place next to the matching video with the same base name (`lesson.mp4` → `lesson.srt`). SRT is auto-converted to WebVTT. |
+| **Documents** | `.pdf` | Rendered via a built-in PDF.js canvas viewer. |
+| **Web lessons** | `.html`, `.htm` | Opened in a sandboxed iframe. |
+| **Images** | `.jpg`, `.png`, `.gif`, `.webp`, `.bmp`, `.svg` | |
+
+Progress is saved to `course-progress.json` inside the chosen folder, so Lumina needs **read/write** permission for it. A small `.lumina-cache/` folder holds generated seek-preview thumbnails.
 
 ---
 
 ## 🎓 Features
 
 ### Dashboard & Gamification
-- Beautiful Hero header with your personalized username.
-- **Stats:** total courses, completed lessons, notes count, bookmark count.
-- **Activity Gamification:** Activity heatmap, productive hours, current & highest streaks.
-- **Recent Bookmarks & Notes** for quick revision.
-- **Export / Import** gamification profile and bookmarks via JSON backup.
+- Personalized hero header with editable username.
+- Stat cards: total courses, completed lessons, notes, and bookmarks.
+- Activity heatmap, most-productive hours, and current/highest streaks.
+- Recent bookmarks & notes for fast revision.
+- One-click **Export / Import** of your full profile and progress.
 
 ### Course Player
-- **Collapsible file tree sidebar** with file-type icons and per-file completion toggles.
-- Subtitle files (`.srt`, `.vtt`) are **hidden** from the tree but still loaded automatically for videos.
-- **Keyboard shortcuts:** previous/next, completion, bookmarks, seeking, and playback-speed control.
+- Collapsible file-tree sidebar with file-type icons and per-file completion toggles.
+- Subtitle files are hidden from the tree but auto-loaded for their video.
+- Duration-weighted progress — a 40-min lecture counts more than a 2-min intro.
+- Full keyboard control (see below).
 
-### Video Player & Subtitles
-- **Auto-play** & **Auto-proceed** to the next lesson automatically.
-- **Speeds:** 0.5x → 3.5x, with 0.1x keyboard stepping.
-- **Visual feedback:** YouTube-style seek flashes for `Z` / `X` and a translucent speed box for speed shortcuts.
-- **Immersive Up Next:** Netflix-style full-player countdown with cancel/play-now controls before the next lesson starts.
-- **Thumbnail seek peek:** video hover timeline previews.
-- **Subtitle search panel:** searchable side-panel of captions, click any cue to jump.
+### Video & Subtitles
+- **Auto-play** and **auto-proceed** with a Netflix-style "Up Next" countdown (cancel / play-now).
+- Playback speed **0.5×–3.5×** with 0.1× keyboard stepping and one-tap presets.
+- YouTube-style seek flashes for `Z` / `X` and a translucent speed overlay.
+- **Thumbnail seek peek** — hover the timeline to preview frames (cached as a sprite).
+- **Searchable caption panel** — filter cues and click any line to jump.
+- **Resume banner** — pick up where you left off, or press `Enter` to start over.
 
 ### Notes, Bookmarks & Viewers
-- Markdown notes below every lesson & video bookmarks with exact timestamps.
-- Built-in PDF canvas viewer and isolated HTML sandboxed iframe.
+- Live-preview Markdown notes attached to every lesson.
+- File-level saves (`B`) and precise timestamp bookmarks (`Shift`+`B`).
+- Built-in PDF viewer and isolated HTML sandbox.
 
 ---
 
@@ -104,45 +116,37 @@ Progress is written back to `course-progress.json` in the selected course folder
 
 | Key | Action |
 |---|---|
-| `←` | Previous lesson |
-| `→` | Next lesson |
-| `Z` | Seek backward 10 seconds with visual feedback |
-| `X` | Seek forward 10 seconds with visual feedback |
-| `S` | Decrease playback speed by 0.1x |
-| `D` | Increase playback speed by 0.1x |
-| `G` | Set speed to 1.8x |
-| `H` | Set speed to 2.5x |
-| `Y` | Set speed to 3.0x |
-| `B` | Add a video bookmark |
+| `←` / `→` | Previous / next lesson |
+| `Z` / `X` | Seek backward / forward 10s (with visual feedback) |
+| `S` / `D` | Decrease / increase playback speed by 0.1× |
+| `R` | Toggle 1.0× |
+| `G` | Toggle 1.8× |
+| `H` | Toggle 2.5× |
+| `Y` | Toggle 3.0× |
+| `C` | Toggle captions |
+| `B` | Save / unsave current file |
+| `Shift`+`B` | Add a timestamp bookmark |
 | `.` | Toggle current lesson complete |
-| `Enter` | Start the Up Next lesson while countdown is visible |
+| `Enter` | Start "Up Next" now (or restart from 0 while the resume banner shows) |
 
-Speed shortcuts update the video playback rate immediately and show the current speed in a small translucent overlay.
-
----
-
-## 💾 Progress & Sync
-
-Lumina stores folder permissions in IndexedDB so your courses remain available after reloads. Per-course progress, notes, bookmarks, completion state, and lesson durations are stored in `course-progress.json` inside each selected course folder. Use **Export All** and **Import** to move gamification data and merged progress between browsers or devices.
+Preset speed keys (`R`/`G`/`H`/`Y`) toggle back to your previous speed when pressed again.
 
 ---
 
-## 📦 Shipping & Releases
+## 🏗️ Architecture
 
-Lumina v2 is focused strictly on the Web/PWA and Tauri Desktop builds.
+Lumina is **vanilla JavaScript (ES modules)** with no framework and no bundler at runtime.
 
-### 1. Web / GitHub Pages (Primary)
-The root directory is ready to be hosted as a static site (GitHub Pages, Vercel, Netlify). 
-
-### 2. Desktop (Tauri)
-To build the native desktop app (e.g., Windows `.exe`, `.msi`) locally:
-```bash
-cd src-tauri
-cargo install tauri-cli
-npm i
-cargo tauri build
-```
-The compiled installers will be in `src-tauri/target/release/bundle/`.
+| Layer | Technology |
+|---|---|
+| **UI** | Vanilla JS + Tailwind CSS |
+| **Video** | [Plyr](https://plyr.io) — speeds, captions, PiP, fullscreen |
+| **Subtitles** | Auto-detect `.srt`/`.vtt`, SRT→WebVTT conversion, searchable cues |
+| **Seek previews** | Background-generated single-sprite thumbnails (memory-friendly) |
+| **PDF** | Mozilla PDF.js canvas viewer |
+| **HTML lessons** | Sandboxed iframe |
+| **Storage** | IndexedDB (folder handles) + per-course `course-progress.json` |
+| **Offline** | Service Worker caches the full app shell |
 
 ---
 
@@ -150,77 +154,78 @@ The compiled installers will be in `src-tauri/target/release/bundle/`.
 
 ```
 lumina/
-├── index.html              # App shell (ES modules)
-├── manifest.json           # PWA standalone execution
-├── sw.js                   # Offline PWA cache
-├── server.js               # Dev localhost server
-├── src-tauri/              # Native App wrapper
+├── index.html            # App shell (loads ES modules)
+├── manifest.json         # PWA manifest (standalone)
+├── sw.js                 # Service Worker — offline app-shell cache
+├── server.js             # Dev localhost server (port 3321)
+├── build-web.js          # Copies a deployable bundle into dist/
 ├── css/
-│   └── style.css           # Glassmorphism, animations, overrides
+│   └── style.css         # Glassmorphism design system & animations
 ├── js/
-│   ├── app.js              # Entry point, init, PWA setup
-│   ├── state.js            # Global reactive state & Gamification
-│   ├── icons.js            # SVG icon library
-│   ├── db.js               # IndexedDB storage
-│   ├── fs.js               # File scanning, VTT/SRT parsers
-│   ├── render.js           # Dashboard, UI & Heatmap creation
-│   ├── player.js           # Plyr integration & subtitles
-│   ├── native-fs.js        # Tauri bridging
-│   └── pdf-viewer.js       # PDF render logic
-└── vendor/                 # Dependencies (Tailwind, Plyr, PDF.js)
+│   ├── app.js            # Entry point: boot, courses, SW, shortcuts
+│   ├── state.js          # Global state + gamification
+│   ├── db.js             # IndexedDB (folder handle persistence)
+│   ├── fs.js             # Folder scan, SRT/VTT parsing, progress math
+│   ├── render.js         # Dashboard, sidebar, top bar, heatmap
+│   ├── player.js         # Plyr integration, subtitles, bookmarks, auto-proceed
+│   ├── media-index.js    # Background duration indexing + thumbnail sprites
+│   ├── pdf-viewer.js     # PDF.js rendering
+│   ├── native-fs.js      # Tauri filesystem bridge
+│   └── icons.js          # Inline SVG icon set
+├── vendor/               # Plyr, PDF.js, Tailwind
+└── src-tauri/            # Native desktop wrapper
 ```
 
 ---
 
-## ⚠️ Known Limitations
-1. **File System Access API** is Chromium-only (Chrome, Edge, Brave, Opera). Firefox & Safari desktop will need the **Tauri** wrapper.
-2. The GitHub Pages web build is not supported on mobile browsers.
-3. Codecs: MKV playback depends on the browser. MP4/H.264 is safest.
+## 💾 Progress & Sync
 
-Built for learners who own their files. 🎓
-
-
-# File Tree: lumina
-
-**Generated:** 6/1/2026, 11:09:58 AM
-**Root Path:** `d:\OfflineCoursePlayers\lumina`
-
-```
-├── 📁 assets
-│   ├── 🖼️ icon.png
-│   └── 🖼️ splash.png
-├── 📁 css
-│   └── 🎨 style.css
-├── 📁 js
-│   ├── 📄 app.js
-│   ├── 📄 db.js
-│   ├── 📄 fs.js
-│   ├── 📄 icons.js
-│   ├── 📄 native-fs.js
-│   ├── 📄 pdf-viewer.js
-│   ├── 📄 player.js
-│   ├── 📄 render.js
-│   └── 📄 state.js
-├── 📁 vendor
-│   ├── 🎨 pdf_viewer.css
-│   ├── 📄 pdfjs.min.mjs
-│   ├── 📄 pdfjs.worker.min.mjs
-│   ├── 🎨 plyr.css
-│   ├── 📄 plyr.js
-│   └── 📄 tailwindcss.js
-├── ⚙️ .gitignore
-├── 📝 APP_EXPORT_INSTRUCTIONS.md
-├── 📝 README.md
-├── 📄 build-web.js
-├── 🌐 index.html
-├── 📦 lumina.zip
-├── ⚙️ manifest.json
-├── ⚙️ package.json
-├── 📄 server.js
-└── 📄 sw.js
-```
+- **Folder handles** are stored in IndexedDB, so your courses reappear after a reload (you may be asked to re-grant permission).
+- **Per-course state** — completion, playback position, notes, bookmarks, and indexed durations — lives in `course-progress.json` inside each course folder. It travels with your files.
+- **Export All / Import** moves your gamification profile and merges progress across browsers or machines via a single JSON backup.
 
 ---
-*Generated by FileTree Pro Extension*
 
-This site uses Google Analytics to measure visit counts.
+## 📦 Building & Releasing
+
+### Static web bundle
+
+```bash
+npm run build
+```
+
+Produces a `dist/` folder ready for any static host (GitHub Pages, Vercel, Netlify).
+
+### Desktop app (Tauri)
+
+```bash
+cd src-tauri
+cargo install tauri-cli   # first time only
+npm install
+cargo tauri build
+```
+
+Installers land in `src-tauri/target/release/bundle/`.
+
+---
+
+## ⚠️ Browser Support & Limitations
+
+| Browser | Web / PWA | Notes |
+|---|---|---|
+| Chrome / Edge / Brave / Opera (desktop) | ✅ Full | Requires the File System Access API. |
+| Firefox / Safari (desktop) | ❌ | No File System Access API — use the **Tauri** app. |
+| Mobile browsers | ❌ | Folder picker unavailable; shows a guidance warning. |
+
+- **Codecs:** MP4/H.264 is safest. MKV and exotic codecs depend on the browser.
+- Lumina is intentionally **desktop-first** for the web build.
+
+---
+
+## 🔒 Privacy
+
+Lumina is **zero-backend**. Your videos, notes, and progress stay on your device — nothing is uploaded. The hosted demo loads only Google Analytics to count page visits; it never sees your files or course data.
+
+---
+
+<p align="center"><em>Built for learners who own their files. 🎓</em></p>

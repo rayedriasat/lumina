@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { Ico } from './icons.js';
 import { escapeHtml, fmtTime, fmtDuration, overallCourseProgress, folderProgress, isFolderDone, getDescendantFiles, flattenAll, circularProgressSVG } from './fs.js';
-import { overallProgress, isDone, cleanupMedia, loadFile, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, setDone } from './player.js';
+import { overallProgress, isDone, isFileSaved, cleanupMedia, loadFile, renderSubtitles, renderRightPanel, toggleComplete, loadFileByPath, nextFile, prevFile, setDone, toggleFileSave, addTimestampBookmark, removeTimestampBookmark, jumpToTimestamp } from './player.js';
 
 export function render() {
   const app = document.getElementById('app');
@@ -10,8 +10,11 @@ export function render() {
     const dashboardScrollTop = state.view === 'dashboard' ? (app.firstElementChild?.scrollTop || 0) : 0;
     const dashboardScrollLeft = state.view === 'dashboard' ? (app.firstElementChild?.scrollLeft || 0) : 0;
     state.lastRenderView = state.view;
-    if (state.view === 'dashboard') renderDashboard(app);
-    else if (state.view === 'player') renderPlayer(app);
+    if (state.view === 'dashboard') {
+      if (state.subView === 'all-bookmarks') renderAllBookmarks(app);
+      else if (state.subView === 'all-notes') renderAllNotes(app);
+      else renderDashboard(app);
+    } else if (state.view === 'player') renderPlayer(app);
     if (state.view === 'dashboard') {
       const scrollHost = app.firstElementChild;
       if (scrollHost) {
@@ -221,6 +224,270 @@ function renderHeatmap(state) {
     </div>`;
 }
 
+/* ---------- All Bookmarks / All Notes sub-views ----------
+ *
+ * Aggregated cross-course views. The user can:
+ *  - Search by label, file name, course name, folder name, or note text
+ *  - Click a result to jump to the file (and timestamp for bookmarks)
+ *
+ * Bookmarks include both file-level saves (the "B" key) and
+ * timestamp bookmarks (the "Shift+B" key). The result list is grouped
+ * by course, then by folder, then by file.
+ */
+function setSubView(sub) {
+  state.subView = sub;
+  state.subViewQuery = '';
+  render();
+}
+
+window.setSubView = setSubView;
+
+function setSubViewQuery(q) {
+  state.subViewQuery = q || '';
+  render();
+}
+window.setSubViewQuery = setSubViewQuery;
+
+function filterText(s) {
+  return (s || '').toString().toLowerCase();
+}
+
+function pathFolder(path) {
+  const idx = path.lastIndexOf('/');
+  return idx >= 0 ? path.substring(0, idx) : '';
+}
+
+function fileBasename(path) {
+  return path.split('/').pop();
+}
+
+function getSavedFiles(course) {
+  const out = [];
+  if (!course?.progress?.files) return out;
+  for (const key in course.progress.files) {
+    if (course.progress.files[key].saved) {
+      out.push({ path: key, savedAt: course.progress.files[key].savedAt });
+    }
+  }
+  return out;
+}
+
+function getBookmarkedFiles(course) {
+  const out = [];
+  if (!course?.progress?.files) return out;
+  for (const key in course.progress.files) {
+    const p = course.progress.files[key];
+    if (p.bookmarks && p.bookmarks.length) {
+      out.push({ path: key, bookmarks: p.bookmarks });
+    }
+  }
+  return out;
+}
+
+function getNotedFiles(course) {
+  const out = [];
+  if (!course?.progress?.files) return out;
+  for (const key in course.progress.files) {
+    const p = course.progress.files[key];
+    if (p.notes && p.notes.trim()) {
+      out.push({ path: key, notes: p.notes, updatedAt: p.updatedAt || 0 });
+    }
+  }
+  return out;
+}
+
+function buildAllBookmarksHtml(query) {
+  const q = filterText(query);
+  let totalMatches = 0;
+  const sections = state.courses.map(course => {
+    const savedFiles = getSavedFiles(course);
+    const bookmarkedFiles = getBookmarkedFiles(course);
+    const fileSet = new Set();
+    savedFiles.forEach(s => fileSet.add(s.path));
+    bookmarkedFiles.forEach(b => fileSet.add(b.path));
+    if (fileSet.size === 0) return '';
+
+    // Group files by folder.
+    const folderMap = new Map();
+    for (const p of fileSet) {
+      const folder = pathFolder(p) || '(root)';
+      if (!folderMap.has(folder)) folderMap.set(folder, []);
+      folderMap.get(folder).push(p);
+    }
+
+    // Filter by query.
+    const folderEntries = [...folderMap.entries()]
+      .map(([folder, paths]) => {
+        const fileRows = paths.map(p => {
+          const baseName = fileBasename(p);
+          const savedEntry = savedFiles.find(s => s.path === p);
+          const bmEntry = bookmarkedFiles.find(b => b.path === p);
+          const rowText = filterText(baseName + ' ' + folder + ' ' + (bmEntry?.bookmarks || []).map(b => b.label).join(' '));
+          if (q && !rowText.includes(q)) return '';
+          totalMatches++;
+          const savedBadge = savedEntry ? `<span class="bm-pill bm-pill--saved" title="Saved file">${Ico.bookmarkFill} Saved</span>` : '';
+          const bmList = (bmEntry?.bookmarks || []).map((b, i) => `
+            <button onclick="window.jumpToBookmarkInCourse('${course.id}', '${escapeAttr(p)}', ${b.time})" class="bm-ts">
+              <span class="bm-ts-time">${escapeHtml(b.label || fmtTime(b.time))}</span>
+              <span class="bm-ts-arrow">${Ico.play}</span>
+            </button>
+          `).join('');
+          return `
+            <div class="bm-file">
+              <div class="bm-file-head">
+                <div class="bm-file-name">${escapeHtml(baseName)}</div>
+                ${savedBadge}
+                <button onclick="window.openCourse('${course.id}', '${escapeAttr(p)}')" class="bm-file-open" title="Open file at start">${Ico.play}</button>
+              </div>
+              ${bmList ? `<div class="bm-ts-list">${bmList}</div>` : ''}
+            </div>`;
+        }).join('');
+        if (!fileRows) return '';
+        return `
+          <div class="bm-folder">
+            <div class="bm-folder-head">${Ico.folder} ${escapeHtml(folder)}</div>
+            <div class="bm-folder-body">${fileRows}</div>
+          </div>`;
+      })
+      .join('');
+
+    if (!folderEntries) return '';
+    const stats = savedFiles.length + bookmarkedFiles.reduce((acc, b) => acc + b.bookmarks.length, 0);
+    return `
+      <div class="bm-course">
+        <div class="bm-course-head" onclick="window.openCourse('${course.id}')">
+          <div class="bm-course-title">${escapeHtml(course.name)}</div>
+          <div class="bm-course-count">${savedFiles.length} saved · ${bookmarkedFiles.reduce((a, b) => a + b.bookmarks.length, 0)} timestamps</div>
+        </div>
+        <div class="bm-course-body">${folderEntries}</div>
+      </div>`;
+  }).join('');
+
+  if (!sections) {
+    return `<div class="rp-empty-state">${Ico.bookmark} <div class="mt-2 text-base">No bookmarks yet</div><div class="text-[12px] text-slate-500 mt-1">Press <kbd>B</kbd> to save a file or <kbd>Shift</kbd>+<kbd>B</kbd> in a video to add a timestamp.</div></div>`;
+  }
+  return sections;
+}
+
+function buildAllNotesHtml(query) {
+  const q = filterText(query);
+  let totalMatches = 0;
+  const sections = state.courses.map(course => {
+    const noted = getNotedFiles(course);
+    if (!noted.length) return '';
+
+    const folderMap = new Map();
+    for (const n of noted) {
+      const folder = pathFolder(n.path) || '(root)';
+      if (!folderMap.has(folder)) folderMap.set(folder, []);
+      folderMap.get(folder).push(n);
+    }
+
+    const folderEntries = [...folderMap.entries()].map(([folder, items]) => {
+      const fileRows = items.map(n => {
+        const baseName = fileBasename(n.path);
+        const preview = n.notes.length > 220 ? n.notes.substring(0, 220) + '…' : n.notes;
+        const hay = filterText(baseName + ' ' + folder + ' ' + n.notes);
+        if (q && !hay.includes(q)) return '';
+        totalMatches++;
+        return `
+          <div class="bm-file">
+            <div class="bm-file-head">
+              <div class="bm-file-name">${escapeHtml(baseName)}</div>
+              <button onclick="window.openCourse('${course.id}', '${escapeAttr(n.path)}')" class="bm-file-open" title="Open file">${Ico.play}</button>
+            </div>
+            <div class="bm-note-preview">${escapeHtml(preview).replace(/\n/g, '<br>')}</div>
+          </div>`;
+      }).join('');
+      if (!fileRows) return '';
+      return `
+        <div class="bm-folder">
+          <div class="bm-folder-head">${Ico.folder} ${escapeHtml(folder)}</div>
+          <div class="bm-folder-body">${fileRows}</div>
+        </div>`;
+    }).join('');
+
+    if (!folderEntries) return '';
+    return `
+      <div class="bm-course">
+        <div class="bm-course-head" onclick="window.openCourse('${course.id}')">
+          <div class="bm-course-title">${escapeHtml(course.name)}</div>
+          <div class="bm-course-count">${noted.length} note${noted.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="bm-course-body">${folderEntries}</div>
+      </div>`;
+  }).join('');
+
+  if (!sections) {
+    return `<div class="rp-empty-state">${Ico.note} <div class="mt-2 text-base">No notes yet</div><div class="text-[12px] text-slate-500 mt-1">Open a lesson and scroll to the Notes section to add one.</div></div>`;
+  }
+  return sections;
+}
+
+function escapeAttr(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+
+window.jumpToBookmarkInCourse = (courseId, path, time) => {
+  state.subView = null;
+  state.subViewQuery = '';
+  window.openCourse(courseId, path, time);
+};
+
+function renderSubViewShell(app, opts) {
+  const { title, icon, query, html, placeholder } = opts;
+  app.innerHTML = `
+    <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
+      <div class="max-w-6xl mx-auto px-6 md:px-10 pt-8 md:pt-12 pb-10">
+        <div class="flex items-center justify-between mb-6 gap-3">
+          <div class="flex items-center gap-3 min-w-0">
+            <button onclick="window.setSubView(null)" class="p-2 rounded-lg hover:bg-white/10 text-slate-300 shrink-0" title="Back to dashboard">${Ico.arrowLeft}</button>
+            <div class="min-w-0">
+              <h1 class="text-2xl md:text-3xl font-bold text-slate-100 flex items-center gap-2 truncate">${icon} ${escapeHtml(title)}</h1>
+              <p class="text-slate-400 text-sm">All your ${escapeHtml(title.toLowerCase())} across every course, organized by folder.</p>
+            </div>
+          </div>
+        </div>
+        <div class="mb-6">
+          <div class="relative max-w-xl">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none">${Ico.search}</span>
+            <input id="subview-search" type="text" value="${escapeAttr(query || '')}" placeholder="${escapeAttr(placeholder)}" class="w-full bg-slate-900/50 border border-white/10 rounded-xl pl-10 pr-3 py-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50" autofocus>
+          </div>
+        </div>
+        ${html}
+      </div>
+    </div>
+  `;
+  const search = document.getElementById('subview-search');
+  if (search) {
+    search.addEventListener('input', (e) => setSubViewQuery(e.target.value));
+  }
+}
+
+export function renderAllBookmarks(app) {
+  cleanupMedia();
+  const html = buildAllBookmarksHtml(state.subViewQuery);
+  renderSubViewShell(app, {
+    title: 'All Bookmarks',
+    icon: Ico.bookmark,
+    query: state.subViewQuery,
+    html,
+    placeholder: 'Search by file, course, or folder…'
+  });
+}
+
+export function renderAllNotes(app) {
+  cleanupMedia();
+  const html = buildAllNotesHtml(state.subViewQuery);
+  renderSubViewShell(app, {
+    title: 'All Notes',
+    icon: Ico.note,
+    query: state.subViewQuery,
+    html,
+    placeholder: 'Search notes by content, file, or course…'
+  });
+}
+
 export function renderDashboard(app) {
   cleanupMedia();
   const stats = computeDashboardStats();
@@ -321,6 +588,12 @@ export function renderDashboard(app) {
             <button onclick="window.pickCourseFolder()" class="btn-primary px-5 py-3 rounded-xl font-medium flex items-center gap-2 text-sm md:text-base pulse-glow cursor-pointer transition-transform hover:scale-[1.02]">
               ${Ico.plus} Add Course Folder
             </button>
+            <button onclick="window.setSubView('all-bookmarks')" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2 hover:bg-white/10">
+              ${Ico.bookmarkFill} All Bookmarks
+            </button>
+            <button onclick="window.setSubView('all-notes')" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2 hover:bg-white/10">
+              ${Ico.note} All Notes
+            </button>
             <button onclick="window.exportAllProgress()" class="btn-ghost px-5 py-3 rounded-xl font-medium text-sm md:text-base flex items-center gap-2 hover:bg-white/10">
               ${Ico.download} Export All
             </button>
@@ -350,13 +623,19 @@ export function renderDashboard(app) {
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-6 mt-8">
           <div class="glass-panel rounded-2xl p-5">
-            <h3 class="text-lg font-semibold text-slate-100 mb-3 flex items-center gap-2">${Ico.bookmarkFill || Ico.bookmark} Recent Bookmarks</h3>
+            <div class="flex items-center justify-between mb-3 gap-2">
+              <h3 class="text-lg font-semibold text-slate-100 flex items-center gap-2">${Ico.bookmarkFill || Ico.bookmark} Recent Bookmarks</h3>
+              <button onclick="window.setSubView('all-bookmarks')" class="text-[11px] text-indigo-300 hover:text-indigo-200 font-semibold uppercase tracking-wider shrink-0">View all →</button>
+            </div>
             <div class="max-h-64 overflow-auto pr-1 space-y-1 custom-scrollbar">
               ${bookmarksHtml || `<div class="text-slate-500 text-sm">No bookmarks yet.</div>`}
             </div>
           </div>
           <div class="glass-panel rounded-2xl p-5">
-            <h3 class="text-lg font-semibold text-slate-100 mb-3 flex items-center gap-2">${Ico.note} Recent Notes</h3>
+            <div class="flex items-center justify-between mb-3 gap-2">
+              <h3 class="text-lg font-semibold text-slate-100 flex items-center gap-2">${Ico.note} Recent Notes</h3>
+              <button onclick="window.setSubView('all-notes')" class="text-[11px] text-indigo-300 hover:text-indigo-200 font-semibold uppercase tracking-wider shrink-0">View all →</button>
+            </div>
             <div class="max-h-64 overflow-auto pr-1 space-y-1 custom-scrollbar">
               ${notesHtml || `<div class="text-slate-500 text-sm">No notes yet.</div>`}
             </div>
@@ -406,6 +685,9 @@ export function updateTopBar() {
   const p = c ? overallCourseProgress(c) : {};
   const durDisplay = p.durationTotal ? `${fmtDuration(p.durationDone)} / ${fmtDuration(p.durationTotal)}` : '';
   const hasSubs = state.cueData.length > 0 && cur?.type === 'video';
+  const hasBookmarks = c && cur ? isFileSaved(c, cur.path) || (c.progress?.files?.[cur.path]?.bookmarks?.length > 0) : false;
+  const showRightToggle = hasSubs || hasBookmarks;
+  const rightPanelOpen = state.rightPanelOpen && showRightToggle;
   el.innerHTML = `
     <div class="flex items-center gap-2 md:gap-3 overflow-hidden min-w-0">
       <button onclick="window.backToDashboard()" class="p-2 rounded-lg hover:bg-white/10 text-slate-300 shrink-0" title="Dashboard">${Ico.arrowLeft}</button>
@@ -422,8 +704,7 @@ export function updateTopBar() {
       <button onclick="window.toggleComplete()" class="${done ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'btn-ghost text-slate-300'} px-3 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-colors" id="btn-complete" title="Toggle complete (C)">
         ${done ? '✓ Completed' : 'Mark Complete'}
       </button>
-      <button onclick="window.addBookmark()" class="btn-ghost p-2 rounded-lg text-amber-400" title="Bookmark (B)">${Ico.bookmark}</button>
-      ${hasSubs ? `<button onclick="window.toggleRightPanel()" class="btn-ghost p-2 rounded-lg text-indigo-300" title="Subtitles">${Ico.search}</button>` : ''}
+      ${showRightToggle ? `<button onclick="window.toggleRightPanel()" class="btn-ghost p-2 rounded-lg ${rightPanelOpen ? 'text-indigo-200 bg-indigo-500/15' : 'text-indigo-300'}" title="${rightPanelOpen ? 'Hide right panel' : 'Show right panel'}" aria-pressed="${rightPanelOpen}">${Ico.panelRight}</button>` : ''}
       <button onclick="window.nextFile()" class="btn-ghost p-2 rounded-lg" title="Next">${Ico.next}</button>
     </div>
   `;
@@ -711,6 +992,8 @@ export function toggleMobileSidebar() {
 export function backToDashboard() {
   cleanupMedia();
   state.view = 'dashboard';
+  state.subView = null;
+  state.subViewQuery = '';
   state.currentCourse = null;
   state.currentFile = null;
   state.editingUsername = false;

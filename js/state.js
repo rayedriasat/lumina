@@ -1,6 +1,7 @@
 export const state = {
   view: 'dashboard',
   subView: null,
+  subViewQuery: '',
   courses: [],
   currentCourse: null,
   currentFile: null,
@@ -16,6 +17,7 @@ export const state = {
   peekVideo: null,
   cueData: [],
   rightPanelOpen: true,
+  rightPanelTab: 'subtitles',
   sidebarWidth: 288,
   noteText: '',
   autoProceedTimer: null,
@@ -35,6 +37,8 @@ export const state = {
   thumbJob: null,
   indexingStatus: {},
   autoProceedKeydown: null,
+  isCourseStartup: false,
+  resumeBanner: null,
 
   // Gamification & User
   user: {

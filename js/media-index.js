@@ -513,9 +513,18 @@ async function generateThumbnailSprite(cacheDir, entry, file, duration, key, run
   }
 }
 
-async function loadSpriteBundle(cacheDir, manifest) {
+async function loadSpriteBundle(cacheDir, manifest, entryPath) {
   if (!cacheDir || !manifest?.sprite) return null;
-  const inMemory = inMemoryBundles.get(manifest.path);
+  // The previous version keyed the in-memory cache by `manifest.path`,
+  // which is *undefined* (we never write that field on the manifest —
+  // the real path lives on the entry, not the manifest). The lookup
+  // at the call site uses `entry.path`, so the cache never hit and
+  // every call leaked a fresh pair of blob URLs. Key by the entry
+  // path so the second `getPreviewThumbnails` call returns the
+  // already-built bundle.
+  const cacheKey = entryPath || manifest.path;
+  if (!cacheKey) return null;
+  const inMemory = inMemoryBundles.get(cacheKey);
   if (inMemory) return inMemory;
 
   try {
@@ -527,11 +536,11 @@ async function loadSpriteBundle(cacheDir, manifest) {
     const spriteDims = await readImageDimensions(spriteUrl, THUMB_WIDTH * cols, THUMB_HEIGHT * rows);
     const vttText = buildSpriteVtt(spriteUrl, manifest.frames);
     const vttUrl = URL.createObjectURL(new Blob([vttText], { type: 'text/vtt' }));
-    const bundle = { vttUrl, spriteUrl, spriteDims, manifest };
-    inMemoryBundles.set(manifest.path, bundle);
+    const bundle = { vttUrl, spriteUrl, spriteDims, manifest, path: cacheKey };
+    inMemoryBundles.set(cacheKey, bundle);
     return bundle;
   } catch (error) {
-    console.warn('[Lumina] Failed to load sprite bundle for', manifest.path, error);
+    console.warn('[Lumina] Failed to load sprite bundle for', cacheKey, error);
     return null;
   }
 }
@@ -630,9 +639,8 @@ export async function getPreviewThumbnails(course, entry, file, duration) {
   }
 
   if (!manifest) return null;
-  const bundle = await loadSpriteBundle(cacheDir, manifest);
+  const bundle = await loadSpriteBundle(cacheDir, manifest, entry.path);
   if (!bundle) return null;
-  bundle.path = entry.path;
   return bundle;
 }
 

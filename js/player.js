@@ -102,6 +102,9 @@ function detachPlayerListeners(player) {
 
 export function cleanupMedia() {
   flushQueuedSaves();
+  if (state.resumeBanner) {
+    try { dismissResumeBanner(); } catch {}
+  }
   if (state.player) {
     try { detachBufferWarmer(state.player); } catch {}
     try { detachPlayerListeners(state.player); } catch {}
@@ -174,7 +177,16 @@ function finishVideoSetup(entry, file, savedPos) {
   }
   if (savedPos > 0 && savedPos < (dur || Infinity)) {
     try { player.currentTime = savedPos; } catch {}
+    // Show the "Resumed from MM:SS — Press Enter to start over" banner
+    // only when the auto-resume actually kicked in (i.e. we are in a
+    // course startup and the file had a real saved position).
+    if (state.isCourseStartup) {
+      showResumeBanner(savedPos, dur);
+    }
   }
+  // We are done with the "course startup" first-file phase; any
+  // subsequent file load (sidebar, next/prev) will start from 0.
+  state.isCourseStartup = false;
   try { player.play(); } catch (e) {}
   if (state.bufferWarmDetach) { try { state.bufferWarmDetach(); } catch {} }
   state.bufferWarmDetach = attachBufferWarmer(player);
@@ -247,7 +259,9 @@ export async function loadFile(entry) {
       } catch(e){}
     }
 
-    const savedPos = state.currentCourse.progress?.files?.[entry.path]?.position || 0;
+    const savedPos = state.isCourseStartup
+      ? (state.currentCourse.progress?.files?.[entry.path]?.position || 0)
+      : 0;
     const autoplay = true;
 
     if (isSeamlessVideo) {
@@ -264,27 +278,37 @@ export async function loadFile(entry) {
       // duration capture, no buffer warmer, no thumbnails, and no
       // auto-proceed. Set up immediately if the new media is already
       // ready; otherwise arm a 'canplay' fallback so we never miss it.
+      // The previous version of this block could call
+      // `finishVideoSetup` twice — once from `canplay` and once from
+      // the 2.5 s hard-cap — which in turn ran `setupPreviewThumbnails`
+      // twice, causing a stale Plyr `tt` instance to take over hover
+      // handling with a revoked sprite URL ("blank after a few
+      // seconds" symptom). Both arms now share a single `finalize`
+      // with a `finished` latch.
       const tryFinish = () => {
         const media = state.player?.media;
         if (!media) return;
         if (Number.isFinite(media.duration) && media.duration > 0 && media.readyState >= 1) {
           finishVideoSetup(entry, file, savedPos);
-        } else {
-          const onCanPlay = () => {
-            try { state.player.off('canplay', onCanPlay); } catch {}
-            finishVideoSetup(entry, file, savedPos);
-          };
-          state.player.on('canplay', onCanPlay);
-          // Hard cap: if 'canplay' never fires (rare codecs), still
-          // run the setup after a short delay so the user is not
-          // stuck with a player that has no listeners.
-          setTimeout(() => {
-            if (state.currentFile?.path === entry.path && state.player?.media) {
-              try { state.player.off('canplay', onCanPlay); } catch {}
-              finishVideoSetup(entry, file, savedPos);
-            }
-          }, 2500);
+          return;
         }
+        let finished = false;
+        let hardCap = 0;
+        const finalize = () => {
+          if (finished) return;
+          finished = true;
+          try { state.player.off('canplay', onCanPlay); } catch {}
+          if (hardCap) clearTimeout(hardCap);
+          if (state.currentFile?.path === entry.path && state.player?.media) {
+            finishVideoSetup(entry, file, savedPos);
+          }
+        };
+        const onCanPlay = finalize;
+        state.player.on('canplay', onCanPlay);
+        // Hard cap: if 'canplay' never fires (rare codecs), still
+        // run the setup after a short delay so the user is not
+        // stuck with a player that has no listeners.
+        hardCap = setTimeout(finalize, 2500);
       };
       tryFinish();
 
@@ -315,9 +339,40 @@ export async function loadFile(entry) {
         });
         makePlayerSlidersNonFocusable(state.player);
         ensurePlayerListeners(state.player);
-        state.player.on('ready', () => {
-          finishVideoSetup(state.currentFile, file, savedPos);
-        });
+
+        // Use the same `tryFinish` pattern as the seamless path: wait
+        // for the media to actually be ready (readyState >= 1, valid
+        // duration) before seeking. Plyr's 'ready' event fires on
+        // Plyr-internal init, which can be before the <video> element
+        // has metadata — setting currentTime at that point is silently
+        // rejected and the video plays from 0 for a few seconds before
+        // jumping, which is the "auto-resume plays from the start" bug.
+        // Shared `finalize` latch avoids the canplay + 2.5s-cap double
+        // call that used to spawn a duplicate Plyr `tt` instance.
+        const tryFinish = () => {
+          const media = state.player?.media;
+          if (!media) return;
+          if (Number.isFinite(media.duration) && media.duration > 0 && media.readyState >= 1) {
+            finishVideoSetup(entry, file, savedPos);
+            return;
+          }
+          let finished = false;
+          let hardCap = 0;
+          const finalize = () => {
+            if (finished) return;
+            finished = true;
+            try { state.player.off('canplay', onCanPlay); } catch {}
+            if (hardCap) clearTimeout(hardCap);
+            if (state.currentFile?.path === entry.path && state.player?.media) {
+              finishVideoSetup(entry, file, savedPos);
+            }
+          };
+          const onCanPlay = finalize;
+          state.player.on('canplay', onCanPlay);
+          hardCap = setTimeout(finalize, 2500);
+        };
+        tryFinish();
+
         state.saveTimer = setInterval(() => {
           if (state.player && state.player.playing && onSaveProgress) onSaveProgress(state.currentCourse);
         }, 6000);
@@ -407,6 +462,12 @@ async function setupPreviewThumbnails(entry, file, duration) {
     if (recorded) duration = recorded;
     else return;
   }
+  // Already set up for this exact entry. Plyr's `setPreviewThumbnails`
+  // builds a fresh `tt` instance every call, so a redundant call here
+  // would tear down the live one. That stale instance keeps listening
+  // for hover and tries to render with a now-revoked sprite URL, which
+  // is the "blank after a few seconds" symptom.
+  if (state.activePreviewThumbs?.path === path) return;
 
   // Mark the job so cleanupMedia() can cancel it if the user navigates away.
   const job = { cancelled: false };
@@ -439,18 +500,249 @@ async function setupPreviewThumbnails(entry, file, duration) {
   }
 }
 
-export function addBookmark() {
+/* ---------- Bookmarks ----------
+ *
+ * Two distinct kinds:
+ *  - File-level "save" (`progress.files[path].saved`): a boolean that
+ *    marks the whole file as saved. Toggled by the B key. Shown as a
+ *    filled bookmark icon in the top bar and on the right panel.
+ *  - Timestamp bookmark (`progress.files[path].bookmarks[]`): an
+ *    array of { time, label, createdAt } entries that record a
+ *    specific moment inside a video. Added with Shift+B (no prompt;
+ *    a sensible default label is generated).
+ */
+export function isFileSaved(course, path) {
+  return !!course?.progress?.files?.[path]?.saved;
+}
+
+export function toggleFileSave() {
   const c = state.currentCourse, f = state.currentFile;
-  if (!c || !f) return;
+  if (!c || !f) return null;
+  ensureProgress(c);
+  if (!c.progress.files[f.path]) c.progress.files[f.path] = {};
+  const next = !c.progress.files[f.path].saved;
+  c.progress.files[f.path].saved = next;
+  c.progress.files[f.path].savedAt = next ? Date.now() : null;
+  if (onSaveProgress) onSaveProgress(c);
+  window.dispatchEvent(new CustomEvent('lumina-file-save-toggled', { detail: { courseId: c.id, path: f.path, saved: next } }));
+  showBookmarkToast(next ? 'File saved' : 'Save removed', next ? Ico.bookmarkFill : Ico.bookmark);
+  refreshBookmarkUi();
+  return next;
+}
+
+export function addTimestampBookmark() {
+  const c = state.currentCourse, f = state.currentFile;
+  if (!c || !f) return null;
   ensureProgress(c);
   if (!c.progress.files[f.path]) c.progress.files[f.path] = {};
   if (!c.progress.files[f.path].bookmarks) c.progress.files[f.path].bookmarks = [];
   const time = (f.type === 'video' && state.player) ? state.player.currentTime : 0;
-  const label = prompt('Bookmark label:', f.type === 'video' ? fmtTime(time) + ' — ' + f.name : f.name);
-  if (label === null) return;
+  const label = fmtTime(time);
   c.progress.files[f.path].bookmarks.push({ time, label, createdAt: Date.now() });
+  c.progress.files[f.path].bookmarks.sort((a, b) => a.time - b.time);
   if (onSaveProgress) onSaveProgress(c);
-  window.dispatchEvent(new CustomEvent('lumina-bookmark-added'));
+  window.dispatchEvent(new CustomEvent('lumina-bookmark-added', { detail: { courseId: c.id, path: f.path, time, label } }));
+  showBookmarkToast(`Bookmarked at ${fmtTime(time)}`, Ico.bookmarkFill);
+  refreshBookmarkUi();
+  return { time, label };
+}
+
+export function removeTimestampBookmark(idx) {
+  const c = state.currentCourse, f = state.currentFile;
+  if (!c || !f) return;
+  if (!c.progress.files[f.path]?.bookmarks) return;
+  const list = c.progress.files[f.path].bookmarks;
+  if (idx < 0 || idx >= list.length) return;
+  list.splice(idx, 1);
+  if (onSaveProgress) onSaveProgress(c);
+  window.dispatchEvent(new CustomEvent('lumina-bookmark-removed', { detail: { courseId: c.id, path: f.path, idx } }));
+  showBookmarkToast('Bookmark removed', Ico.bookmark);
+  refreshBookmarkUi();
+}
+
+export function jumpToTimestamp(time) {
+  const p = state.player;
+  if (!p || p.destroyed) return;
+  try { p.currentTime = Math.max(0, time); } catch {}
+  try { p.play(); } catch {}
+}
+
+// Backward-compatible alias. Older callers invoked `addBookmark` with
+// a prompt-driven label flow. We forward to the timestamp bookmark
+// helper so any existing UI hook still works.
+export function addBookmark() {
+  return addTimestampBookmark();
+}
+
+function showBookmarkToast(message, icon) {
+  const shell = getPlayerShell();
+  if (!shell) return;
+  const old = shell.querySelector('.lumina-bookmark-toast');
+  if (old) old.remove();
+  const div = document.createElement('div');
+  div.className = 'lumina-bookmark-toast';
+  div.innerHTML = `<span class="lumina-bookmark-toast-icon">${icon || Ico.bookmarkFill}</span><span>${escapeHtml(message)}</span>`;
+  shell.appendChild(div);
+  setTimeout(() => {
+    div.classList.add('lumina-bookmark-toast--hiding');
+    setTimeout(() => { try { div.remove(); } catch {} }, 220);
+  }, 1600);
+}
+
+// Re-render the topbar bookmark button and the right panel tabs
+// when the saved state or bookmark list changes.
+function refreshBookmarkUi() {
+  try { window.dispatchEvent(new CustomEvent('lumina-bookmark-updated')); } catch {}
+}
+
+/* ---------- Resume banner ----------
+ *
+ * Shown only when a file is auto-resumed at course startup. The user
+ * can press Enter (or click "Start over") to jump back to 0. The
+ * banner auto-dismisses after 8 seconds of continued playback from
+ * the resumed position, or immediately if the user seeks, switches
+ * files, or navigates away.
+ */
+const RESUME_BANNER_AUTO_DISMISS_MS = 8000;
+
+function showResumeBanner(savedPos, dur) {
+  dismissResumeBanner();
+  const shell = getPlayerShell();
+  if (!shell) return;
+  const div = document.createElement('div');
+  div.className = 'lumina-resume-banner';
+  div.innerHTML = `
+    <div class="lumina-resume-banner-inner">
+      <div class="lumina-resume-banner-icon">${Ico.clock}</div>
+      <div class="lumina-resume-banner-text">
+        <div class="lumina-resume-banner-eyebrow">Resumed from <span class="lumina-resume-banner-time">${escapeHtml(fmtTime(savedPos))}</span>${dur ? ` <span class="lumina-resume-banner-of">of ${escapeHtml(fmtTime(dur))}</span>` : ''}</div>
+        <div class="lumina-resume-banner-hint">Press <kbd>Enter</kbd> or click Start over to begin from the beginning</div>
+      </div>
+      <button class="lumina-resume-banner-action" data-action="startover" title="Start over (Enter)">Start over</button>
+      <button class="lumina-resume-banner-close" data-action="dismiss" title="Dismiss">${Ico.close}</button>
+    </div>
+    <div class="lumina-resume-banner-progress"><span></span></div>
+  `;
+  shell.appendChild(div);
+
+  // Wire up buttons.
+  div.querySelector('[data-action="startover"]').addEventListener('click', () => {
+    startResumeFromBeginning();
+  });
+  div.querySelector('[data-action="dismiss"]').addEventListener('click', () => {
+    dismissResumeBanner();
+  });
+
+  // Wall-clock auto-dismiss: 8s of real time, independent of playback
+  // rate. The previous version tied the countdown to `currentTime`
+  // delta via timeupdate, which meant a 2x playback rate cut the
+  // visible window to ~4 wall-clock seconds and the progress bar
+  // filled twice as fast — the user could not react in time.
+  const shownAt = Date.now();
+  const total = RESUME_BANNER_AUTO_DISMISS_MS;
+
+  // Seek-away detection: if the user actively seeks, dismiss the
+  // banner. The previous `|currentTime - savedPos| > 1.5` check used
+  // raw playback-time delta, which made the banner disappear in
+  // ~1.5 wall-clock seconds at 1x and ~0.4 s at 4x — long before the
+  // user could react. We now compare the per-update `currentTime`
+  // jump against what the elapsed wall-clock × playback rate could
+  // naturally account for; anything beyond that tolerance is a real
+  // user seek (Z/X, bar click, double-click, etc.) and we dismiss.
+  let lastCurrentTime = savedPos;
+  let lastUpdateTime = Date.now();
+  const onSeekAway = () => {
+    const p = state.player;
+    if (!p || p.destroyed) { dismissResumeBanner(); return; }
+    const cur = p.currentTime || 0;
+    const now = Date.now();
+    const deltaT = cur - lastCurrentTime;
+    const deltaWall = (now - lastUpdateTime) / 1000;
+    const rate = (p.speed && Number.isFinite(p.speed) && p.speed > 0) ? p.speed : 1;
+    // 0.5 s tolerance for jitter / variable timeupdate frequency.
+    if (Math.abs(deltaT) > deltaWall * rate + 0.5) {
+      dismissResumeBanner();
+      return;
+    }
+    lastCurrentTime = cur;
+    lastUpdateTime = now;
+  };
+
+  // Progress bar fill: requestAnimationFrame loop driven by Date.now()
+  // so the bar drains at a constant wall-clock rate regardless of
+  // playback speed. Capped at 100% and stops the moment the banner
+  // is dismissed.
+  let rafId = 0;
+  const tick = () => {
+    const banner = state.resumeBanner;
+    if (!banner || banner.div !== div) return;
+    const elapsed = Date.now() - shownAt;
+    if (elapsed >= total) { dismissResumeBanner(); return; }
+    const bar = div.querySelector('.lumina-resume-banner-progress > span');
+    if (bar) bar.style.width = `${Math.min(100, (elapsed / total) * 100)}%`;
+    rafId = requestAnimationFrame(tick);
+  };
+  rafId = requestAnimationFrame(tick);
+
+  // Hard wall-clock timer so the banner never outlives 8s of real
+  // time even if rAF is throttled (background tab, etc.).
+  const autoDismissTimer = setTimeout(() => dismissResumeBanner(), total);
+
+  state.resumeBanner = {
+    div, tick, rafId, savedPos, onSeekAway, autoDismissTimer,
+    keydown: onResumeBannerKeydown
+  };
+  try { state.player.on('timeupdate', onSeekAway); } catch {}
+  document.addEventListener('keydown', onResumeBannerKeydown, true);
+}
+
+function dismissResumeBanner() {
+  const banner = state.resumeBanner;
+  if (!banner) return;
+  state.resumeBanner = null;
+  if (banner.autoDismissTimer) {
+    try { clearTimeout(banner.autoDismissTimer); } catch {}
+  }
+  if (banner.rafId) {
+    try { cancelAnimationFrame(banner.rafId); } catch {}
+  }
+  try { state.player?.off('timeupdate', banner.tick); } catch {}
+  try { state.player?.off('timeupdate', banner.onSeekAway); } catch {}
+  if (banner.keydown) {
+    try { document.removeEventListener('keydown', banner.keydown, true); } catch {}
+  }
+  if (banner.div && banner.div.parentNode) {
+    banner.div.classList.add('lumina-resume-banner--hiding');
+    setTimeout(() => { try { banner.div.remove(); } catch {} }, 220);
+  }
+}
+
+function startResumeFromBeginning() {
+  const p = state.player;
+  if (!p || p.destroyed) return;
+  try { p.currentTime = 0; } catch {}
+  // Persist the new position so subsequent reloads start at 0.
+  const c = state.currentCourse, f = state.currentFile;
+  if (c && f) {
+    setPos(c, f.path, 0, p.duration);
+    if (onSaveProgress) onSaveProgress(c);
+  }
+  dismissResumeBanner();
+}
+
+// Enter key listener for the resume banner. Registered as a
+// capture-phase listener so it fires before any other keydown
+// handlers; torn down when the banner is dismissed.
+function onResumeBannerKeydown(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    startResumeFromBeginning();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    dismissResumeBanner();
+  }
 }
 
 function getPlayerShell() {
@@ -660,34 +952,50 @@ function triggerAutoProceed(fromEnd = false) {
   document.addEventListener('keydown', onEnter, true);
 }
 
+/* ---------- Right panel: Subtitles + Bookmarks tabs ----------
+ *
+ * The right panel hosts two tabs:
+ *  - "Subtitles" — the existing captions list with search
+ *  - "Bookmarks" — file save toggle + timestamp bookmarks list
+ *
+ * The panel is shown when the right panel is open AND at least one
+ * tab has content. The tab is persisted in `state.rightPanelTab` so
+ * switching files keeps the user's last choice.
+ */
+function getRightPanelCounts() {
+  const c = state.currentCourse, f = state.currentFile;
+  const subCount = (state.cueData.length > 0 && f?.type === 'video') ? state.cueData.length : 0;
+  const bmCount = (c && f) ? ((c.progress?.files?.[f.path]?.bookmarks?.length) || 0) : 0;
+  const saved = !!(c && f && c.progress?.files?.[f.path]?.saved);
+  return { subCount, bmCount, saved, hasSubtitles: subCount > 0, hasBookmarks: saved || bmCount > 0 };
+}
+
 export function renderSubtitles() {
+  renderRightPanel();
+}
+
+// `renderRightPanel` is the canonical renderer; `renderSubtitles` is
+// kept as an alias so existing callers continue to work.
+export function renderRightPanel() {
   const desktopEl = document.getElementById('right-panel');
   const mobileEl = document.getElementById('mobile-subtitles');
-  const hasSubs = state.cueData.length > 0 && state.currentFile?.type === 'video';
+  const c = state.currentCourse, f = state.currentFile;
+  const counts = getRightPanelCounts();
 
-  const cuesHtml = state.cueData.map((c, i) => `
-    <div class="px-3 py-2 hover:bg-white/5 cursor-pointer text-xs text-slate-300 border-b border-white/5 transition-colors" onclick="window.seekToCue(${i})">
-      <div class="text-indigo-400 font-mono text-[11px] mb-1">${fmtTime(c.start)} → ${fmtTime(c.end)}</div>
-      <div class="line-clamp-2">${escapeHtml(c.text)}</div>
-    </div>
-  `).join('');
+  // Default to bookmarks tab if the user is on a file with no
+  // subtitles but does have bookmarks, and vice versa.
+  if (state.rightPanelTab === 'subtitles' && !counts.hasSubtitles && counts.hasBookmarks) {
+    state.rightPanelTab = 'bookmarks';
+  } else if (state.rightPanelTab === 'bookmarks' && !counts.hasBookmarks && counts.hasSubtitles) {
+    state.rightPanelTab = 'subtitles';
+  }
 
   // Desktop sidebar
   if (desktopEl) {
-    if (state.rightPanelOpen && hasSubs) {
+    if (state.rightPanelOpen && (counts.hasSubtitles || counts.hasBookmarks)) {
       desktopEl.className = 'hidden md:flex w-80 shrink-0 glass border-l border-white/10 flex-col h-full overflow-hidden';
-      desktopEl.innerHTML = `
-        <div class="h-14 glass-strong flex items-center justify-between px-3 shrink-0">
-          <span class="font-semibold text-slate-200 text-sm flex items-center gap-2">${Ico.search} Subtitles</span>
-          <button onclick="window.toggleRightPanel()" class="p-2 rounded-lg hover:bg-white/10 text-slate-300" title="Hide subtitles">${Ico.close}</button>
-        </div>
-        <div class="p-2 shrink-0">
-          <input type="text" id="sub-search" placeholder="Search captions..." class="w-full bg-slate-900/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
-        </div>
-        <div class="flex-1 overflow-auto text-sm" id="sub-list">
-          ${cuesHtml}
-        </div>
-      `;
+      desktopEl.innerHTML = buildRightPanelHtml({ counts, source: 'desktop' });
+      wireRightPanelHandlers(desktopEl, { source: 'desktop' });
     } else {
       desktopEl.className = 'hidden';
       desktopEl.innerHTML = '';
@@ -696,41 +1004,155 @@ export function renderSubtitles() {
 
   // Mobile inline block
   if (mobileEl) {
-    if (state.rightPanelOpen && hasSubs) {
+    if (state.rightPanelOpen && (counts.hasSubtitles || counts.hasBookmarks)) {
       mobileEl.className = 'md:hidden shrink-0 border-t border-white/10 bg-black/20';
-      mobileEl.innerHTML = `
-        <div class="flex items-center justify-between px-3 py-2 bg-slate-900/50 border-b border-white/10">
-          <span class="text-xs font-semibold text-slate-200 flex items-center gap-2">${Ico.search} Subtitles</span>
-          <button onclick="window.toggleRightPanel()" class="p-1.5 rounded hover:bg-white/10 text-slate-400" title="Hide subtitles">${Ico.close}</button>
-        </div>
-        <div class="p-2">
-          <input type="text" id="sub-search-mob" placeholder="Search captions..." class="w-full bg-slate-900/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50">
-        </div>
-        <div class="max-h-64 overflow-auto text-sm" id="sub-list-mob">
-          ${cuesHtml}
-        </div>
-      `;
+      mobileEl.innerHTML = buildRightPanelHtml({ counts, source: 'mobile' });
+      wireRightPanelHandlers(mobileEl, { source: 'mobile' });
     } else {
       mobileEl.className = 'hidden';
       mobileEl.innerHTML = '';
     }
   }
+}
 
-  // Search listeners
-  const attachSearch = (inputId, listId) => {
-    const input = document.getElementById(inputId);
-    if (input) {
-      input.addEventListener('input', (e) => {
-        const q = e.target.value.toLowerCase();
-        const items = document.querySelectorAll(`#${listId} > div`);
-        items.forEach(item => {
-          item.style.display = item.textContent.toLowerCase().includes(q) ? '' : 'none';
-        });
+function buildRightPanelHtml({ counts, source }) {
+  const tab = state.rightPanelTab;
+  const titleSize = source === 'desktop' ? 'text-sm' : 'text-xs';
+  const inputId = source === 'desktop' ? 'rp-search' : 'rp-search-mob';
+  const listId = source === 'desktop' ? 'rp-list' : 'rp-list-mob';
+  const closeTitle = tab === 'bookmarks' ? 'Hide bookmarks' : 'Hide subtitles';
+
+  const tabsHtml = `
+    <div class="flex items-center gap-1 px-2 pt-2 pb-1 shrink-0" role="tablist">
+      ${counts.hasSubtitles ? `<button role="tab" data-tab="subtitles" class="rp-tab ${tab === 'subtitles' ? 'rp-tab--active' : ''}" title="Subtitles">${Ico.search} <span>Captions</span><span class="rp-tab-count">${counts.subCount}</span></button>` : ''}
+      ${counts.hasBookmarks ? `<button role="tab" data-tab="bookmarks" class="rp-tab ${tab === 'bookmarks' ? 'rp-tab--active' : ''}" title="Bookmarks">${Ico.bookmark} <span>Bookmarks</span>${counts.bmCount > 0 ? `<span class="rp-tab-count">${counts.bmCount}</span>` : ''}</button>` : ''}
+    </div>`;
+
+  let bodyHtml = '';
+  if (tab === 'subtitles' && counts.hasSubtitles) {
+    bodyHtml = `
+      <div class="p-2 shrink-0">
+        <input type="text" id="${inputId}" placeholder="Search captions..." class="w-full bg-slate-900/50 border border-white/10 rounded-lg px-3 py-2 ${titleSize} text-slate-200 focus:outline-none focus:border-indigo-500/50">
+      </div>
+      <div class="flex-1 overflow-auto text-sm ${source === 'mobile' ? 'max-h-64' : ''}" id="${listId}">
+        ${buildCuesHtml()}
+      </div>`;
+  } else if (tab === 'bookmarks') {
+    bodyHtml = buildBookmarksTabHtml({ listId, source });
+  } else {
+    bodyHtml = `<div class="flex-1 flex items-center justify-center text-slate-500 text-sm p-6">Nothing to show.</div>`;
+  }
+
+  return `
+    <div class="h-14 glass-strong flex items-center justify-between px-3 shrink-0">
+      <span class="font-semibold text-slate-200 ${titleSize} flex items-center gap-2">${tab === 'bookmarks' ? Ico.bookmarkFill : Ico.search} ${tab === 'bookmarks' ? 'Bookmarks' : 'Subtitles'}</span>
+      <button data-rp-close class="p-2 rounded-lg hover:bg-white/10 text-slate-300" title="${closeTitle}">${Ico.close}</button>
+    </div>
+    ${tabsHtml}
+    ${bodyHtml}
+  `;
+}
+
+function buildCuesHtml() {
+  return state.cueData.map((c, i) => `
+    <div class="px-3 py-2 hover:bg-white/5 cursor-pointer text-xs text-slate-300 border-b border-white/5 transition-colors" onclick="window.seekToCue(${i})">
+      <div class="text-indigo-400 font-mono text-[11px] mb-1">${fmtTime(c.start)} → ${fmtTime(c.end)}</div>
+      <div class="line-clamp-2">${escapeHtml(c.text)}</div>
+    </div>
+  `).join('');
+}
+
+function buildBookmarksTabHtml({ listId }) {
+  const c = state.currentCourse, f = state.currentFile;
+  if (!c || !f) {
+    return `<div class="flex-1 flex items-center justify-center text-slate-500 text-sm p-6">No file selected.</div>`;
+  }
+  const saved = !!c.progress?.files?.[f.path]?.saved;
+  const bookmarks = c.progress?.files?.[f.path]?.bookmarks || [];
+  const isVideo = f.type === 'video';
+  const dur = state.player?.duration || c.progress?.files?.[f.path]?.duration || 0;
+
+  const listHtml = bookmarks.length
+    ? bookmarks.map((b, i) => `
+        <div class="rp-bm-row group" data-bm="${i}">
+          <div class="rp-bm-time">${escapeHtml(b.label || fmtTime(b.time))}</div>
+          <div class="rp-bm-actions">
+            <button data-bm-action="jump" data-bm-idx="${i}" class="rp-bm-btn rp-bm-btn--jump" title="Jump to ${fmtTime(b.time)}">${Ico.play}</button>
+            <button data-bm-action="remove" data-bm-idx="${i}" class="rp-bm-btn rp-bm-btn--remove" title="Remove bookmark">${Ico.close}</button>
+          </div>
+        </div>
+      `).join('')
+    : `<div class="rp-bm-empty">No timestamp bookmarks yet.<br><span class="text-[11px] text-slate-500">Press <kbd>Shift</kbd>+<kbd>B</kbd> to add one.</span></div>`;
+
+  return `
+    <div class="p-2 shrink-0">
+      <div class="rp-save-card ${saved ? 'rp-save-card--saved' : ''}">
+        <div class="rp-save-text">
+          <div class="rp-save-title">${saved ? 'Saved file' : 'Save this file'}</div>
+          <div class="rp-save-sub">${saved ? 'Visible in your All Bookmarks list' : 'Mark this lesson as a favorite'}</div>
+        </div>
+        <button data-bm-action="toggle-save" class="rp-save-btn ${saved ? 'rp-save-btn--saved' : ''}" title="${saved ? 'Remove save (B)' : 'Save file (B)'}">
+          ${saved ? Ico.bookmarkFill : Ico.bookmark}
+        </button>
+      </div>
+    </div>
+    <div class="rp-bm-list" id="${listId}">
+      ${listHtml}
+    </div>
+    ${isVideo ? `
+    <div class="rp-bm-foot shrink-0">
+      <button data-bm-action="add" class="rp-bm-add" title="Add timestamp bookmark (Shift+B)">
+        ${Ico.plus} <span>Add bookmark here</span>
+      </button>
+    </div>` : ''}
+  `;
+}
+
+function wireRightPanelHandlers(host, { source }) {
+  const inputId = source === 'desktop' ? 'rp-search' : 'rp-search-mob';
+  const listId = source === 'desktop' ? 'rp-list' : 'rp-list-mob';
+
+  // Tab switch
+  host.querySelectorAll('[data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.rightPanelTab = btn.getAttribute('data-tab');
+      renderRightPanel();
+    });
+  });
+
+  // Close
+  const close = host.querySelector('[data-rp-close]');
+  if (close) close.addEventListener('click', () => window.toggleRightPanel());
+
+  // Captions search
+  const input = host.querySelector('#' + inputId);
+  if (input) {
+    input.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      host.querySelectorAll(`#${listId} > div`).forEach(item => {
+        item.style.display = item.textContent.toLowerCase().includes(q) ? '' : 'none';
       });
-    }
-  };
-  attachSearch('sub-search', 'sub-list');
-  attachSearch('sub-search-mob', 'sub-list-mob');
+    });
+  }
+
+  // Bookmark actions
+  host.querySelectorAll('[data-bm-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const action = btn.getAttribute('data-bm-action');
+      const idx = parseInt(btn.getAttribute('data-bm-idx') || '-1', 10);
+      if (action === 'jump') {
+        const bm = state.currentCourse?.progress?.files?.[state.currentFile?.path]?.bookmarks?.[idx];
+        if (bm) jumpToTimestamp(bm.time);
+      } else if (action === 'remove') {
+        removeTimestampBookmark(idx);
+      } else if (action === 'toggle-save') {
+        toggleFileSave();
+      } else if (action === 'add') {
+        addTimestampBookmark();
+      }
+    });
+  });
 }
 
 window.seekToCue = (idx) => {

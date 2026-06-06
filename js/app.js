@@ -2,7 +2,7 @@ import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
 import { render, updateSidebar, updateSidebarSelection, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
-import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, toggleCaptions, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
+import { cleanupMedia, loadFile, setSaveProgress, addBookmark, toggleFileSave, addTimestampBookmark, removeTimestampBookmark, isFileSaved, jumpToTimestamp, renderSubtitles, toggleComplete, toggleCaptions, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
 import { startLibraryMediaIndex, stopCourseMediaIndex, describeIndexProgress, subscribeIndexingProgress } from './media-index.js';
 
 const ENV_WARNING_DISMISS_KEY = 'lumina_env_warning_dismissed';
@@ -41,6 +41,10 @@ window.toggleDoneSidebar = toggleDoneSidebar;
 window.toggleDesktopSidebar = toggleDesktopSidebar;
 window.toggleMobileSidebar = toggleMobileSidebar;
 window.addBookmark = addBookmark;
+window.toggleFileSave = toggleFileSave;
+window.addTimestampBookmark = addTimestampBookmark;
+window.removeTimestampBookmark = removeTimestampBookmark;
+window.jumpToTimestamp = jumpToTimestamp;
 window.exportAllProgress = exportAllProgress;
 window.importAllProgress = importAllProgress;
 
@@ -193,6 +197,11 @@ window.addEventListener('lumina-progress-updated', () => {
   updateSidebar(); updateTopBar();
 });
 
+window.addEventListener('lumina-bookmark-updated', () => {
+  try { updateTopBar(); } catch {}
+  try { renderRightPanel(); } catch {}
+});
+
 window.addEventListener('lumina-resize', () => {
   if (state.view === 'player') { updateSidebar(); updateTopBar(); renderSubtitles(); }
 });
@@ -249,7 +258,8 @@ window.addEventListener('keydown', (e) => {
   let handled = true;
   if (e.key === 'ArrowRight') nextFile();
   else if (e.key === 'ArrowLeft') prevFile();
-  else if (key === 'b') addBookmark();
+  else if (key === 'b' && e.shiftKey) addTimestampBookmark();
+  else if (key === 'b') toggleFileSave();
   else if (key === '.') toggleComplete();
   else if (key === 'c') toggleCaptions();
   else if (key === 'r') toggleFixedPlaybackSpeed(1.0, 'r');
@@ -383,6 +393,13 @@ export async function openCourse(id, filePath = null, seekTime = 0) {
   }
 
   render();
+
+  // Mark this load as a "course startup" so that the first file can
+  // auto-resume from its saved position. The flag is cleared in
+  // finishVideoSetup after the first file has been wired up. Any
+  // subsequent loadFile() call (sidebar, next/prev) leaves the flag
+  // false and the file starts from the beginning, per the new UX.
+  state.isCourseStartup = !filePath;
 
   let target = filePath ? course.flatFiles.find(f => f.path === filePath) : null;
   if (!target) target = course.flatFiles.find(f => !course.progress?.files?.[f.path]?.completed) || course.flatFiles[0];
