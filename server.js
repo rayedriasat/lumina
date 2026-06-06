@@ -39,34 +39,71 @@ const server = http.createServer((req, res) => {
 
   const ext = String(path.extname(filePath)).toLowerCase();
   const contentType = MIME[ext] || 'application/octet-stream';
+  const isMedia = contentType.startsWith('video/') || contentType === 'application/pdf';
 
-  fs.readFile(filePath, (error, content) => {
-    if (error) {
-      if (error.code === 'ENOENT') {
-        // SPA fallback for client-side routing
-        if (req.url.indexOf('.') === -1) {
-          fs.readFile('./index.html', (e2, c2) => {
-            if (e2) {
-              res.writeHead(500); res.end('Server Error');
-            } else {
-              res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(c2, 'utf-8');
-            }
-          });
+  fs.stat(filePath, (statError, stat) => {
+    if (!statError && stat.isFile() && isMedia) {
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= stat.size || start > end) {
+          res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
+          res.end();
           return;
         }
-        res.writeHead(404, { 'Content-Type': 'text/html' });
-        res.end('<h1>404 Not Found</h1>', 'utf-8');
-      } else {
-        res.writeHead(500);
-        res.end('Sorry, server error: ' + error.code + ' ..\n');
+        const chunkSize = end - start + 1;
+
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunkSize,
+          'Content-Type': contentType,
+          'Cache-Control': 'no-cache'
+        });
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+        return;
       }
-    } else {
+
       res.writeHead(200, {
+        'Accept-Ranges': 'bytes',
+        'Content-Length': stat.size,
         'Content-Type': contentType,
         'Cache-Control': 'no-cache'
       });
-      res.end(content, 'utf-8');
+      fs.createReadStream(filePath).pipe(res);
+      return;
     }
+
+    fs.readFile(filePath, (error, content) => {
+      if (error) {
+        if (error.code === 'ENOENT') {
+          // SPA fallback for client-side routing
+          if (req.url.indexOf('.') === -1) {
+            fs.readFile('./index.html', (e2, c2) => {
+              if (e2) {
+                res.writeHead(500); res.end('Server Error');
+              } else {
+                res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(c2, 'utf-8');
+              }
+            });
+            return;
+          }
+          res.writeHead(404, { 'Content-Type': 'text/html' });
+          res.end('<h1>404 Not Found</h1>', 'utf-8');
+        } else {
+          res.writeHead(500);
+          res.end('Sorry, server error: ' + error.code + ' ..\n');
+        }
+      } else {
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Cache-Control': 'no-cache'
+        });
+        res.end(content, 'utf-8');
+      }
+    });
   });
 });
 

@@ -25,6 +25,18 @@ export async function restoreNativeHandle(data) {
   return null;
 }
 
+function mimeFromName(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (ext === 'mp4') return 'video/mp4';
+  if (ext === 'webm') return 'video/webm';
+  if (ext === 'ogg' || ext === 'ogv') return 'video/ogg';
+  if (ext === 'mov') return 'video/quicktime';
+  if (ext === 'vtt') return 'text/vtt';
+  if (ext === 'srt') return 'text/plain';
+  if (ext === 'pdf') return 'application/pdf';
+  return '';
+}
+
 function createTauriHandle(path, name, readDir, readTextFile, convertFileSrc, isDir = true) {
   return {
     kind: isDir ? 'directory' : 'file',
@@ -50,6 +62,7 @@ function createTauriHandle(path, name, readDir, readTextFile, convertFileSrc, is
       return {
         name,
         path,
+        type: mimeFromName(name),
         nativeUrl,
         async text() {
           return await readTextFile(path);

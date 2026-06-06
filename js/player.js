@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { Ico } from './icons.js';
 import { srtToVtt, parseVTT, fmtTime, mdToHtml, escapeHtml, flattenFiles, resolveDirHandle } from './fs.js';
 import { renderPDF } from './pdf-viewer.js';
+import { getPreviewThumbnails, cleanupPreviewThumbnails, warmPlaybackBuffer } from './media-index.js';
 
 let onSaveProgress = null;
 export function setSaveProgress(fn) { onSaveProgress = fn; }
@@ -13,12 +14,28 @@ function ensureProgress(course) {
   if (!course.collapsed) course.collapsed = new Set();
 }
 
+function flushQueuedSaves() {
+  if (state.notesSaveTimer) {
+    clearTimeout(state.notesSaveTimer);
+    state.notesSaveTimer = null;
+    saveCurrentNotes();
+  }
+  if (state.progressSaveTimer) {
+    clearTimeout(state.progressSaveTimer);
+    state.progressSaveTimer = null;
+    if (state.currentCourse && onSaveProgress) onSaveProgress(state.currentCourse);
+  }
+}
+
 export function cleanupMedia() {
+  flushQueuedSaves();
   if (state.player) { try { state.player.destroy(); } catch(e){} state.player = null; }
   if (state.saveTimer) { clearInterval(state.saveTimer); state.saveTimer = null; }
   if (state.activeBlobUrl) { URL.revokeObjectURL(state.activeBlobUrl); state.activeBlobUrl = null; }
   state.activeSubUrls.forEach(u => URL.revokeObjectURL(u));
   state.activeSubUrls = [];
+  cleanupPreviewThumbnails(state.activePreviewThumbs);
+  state.activePreviewThumbs = null;
   state.cueData = [];
   if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
   if (state.peekVideo) { state.peekVideo = null; }
@@ -42,6 +59,15 @@ export function setPos(course, path, pos, dur) {
   course.progress.files[path].position = pos;
   if (dur) course.progress.files[path].duration = dur;
 }
+
+function queueProgressSave(course, delay = 1200) {
+  if (!course || !onSaveProgress) return;
+  if (state.progressSaveTimer) clearTimeout(state.progressSaveTimer);
+  state.progressSaveTimer = setTimeout(() => {
+    state.progressSaveTimer = null;
+    onSaveProgress(course);
+  }, delay);
+}
 export function overallProgress(course) {
   if (!course.flatFiles || !course.flatFiles.length) return 0;
   const done = course.flatFiles.filter(f => isDone(course, f.path)).length;
@@ -58,10 +84,13 @@ export async function loadFile(entry) {
     cleanupMedia();
   } else {
     // Partial cleanup
+    flushQueuedSaves();
     if (state.saveTimer) { clearInterval(state.saveTimer); state.saveTimer = null; }
     if (state.activeBlobUrl) { URL.revokeObjectURL(state.activeBlobUrl); state.activeBlobUrl = null; }
     state.activeSubUrls.forEach(u => URL.revokeObjectURL(u));
     state.activeSubUrls = [];
+    cleanupPreviewThumbnails(state.activePreviewThumbs);
+    state.activePreviewThumbs = null;
     state.cueData = [];
     if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
     if (state.peekVideo) { state.peekVideo = null; }
@@ -124,13 +153,19 @@ export async function loadFile(entry) {
         if (dur && dur > 0) {
           ensureProgress(state.currentCourse);
           if (!state.currentCourse.progress.files[entry.path]) state.currentCourse.progress.files[entry.path] = {};
-          state.currentCourse.progress.files[entry.path].duration = dur;
+          Object.assign(state.currentCourse.progress.files[entry.path], {
+            duration: dur,
+            size: file.size || 0,
+            lastModified: file.lastModified || 0,
+            indexedAt: Date.now()
+          });
         }
         if (savedPos > 0 && savedPos < (dur || Infinity)) {
           state.player.currentTime = savedPos;
         }
         try { state.player.play(); } catch(e){}
-        setupPeek(url);
+        warmPlaybackBuffer(state.player);
+        setupPreviewThumbnails(entry, file, dur);
         setupAutoProceed();
       };
       state.player.on('ready', onReady);
@@ -144,7 +179,7 @@ export async function loadFile(entry) {
       viewerWrap.innerHTML = `
         <div class="w-full flex items-center justify-center p-3 md:p-6 animate-fade-in">
           <div class="w-full max-w-[96vw] md:max-w-[88vw] aspect-video relative" style="max-height:calc(100vh - 3.5rem)">
-            <video id="lumina-video" controls crossorigin playsinline class="w-full h-full" preload="metadata" ${autoplay ? 'autoplay' : ''}>
+            <video id="lumina-video" controls playsinline class="w-full h-full" preload="auto" ${autoplay ? 'autoplay' : ''}>
               <source src="${url}" type="${file.type || 'video/mp4'}">
               ${tracksHtml}
             </video>
@@ -165,19 +200,25 @@ export async function loadFile(entry) {
             ensureProgress(state.currentCourse);
             const path = state.currentFile.path;
             if (!state.currentCourse.progress.files[path]) state.currentCourse.progress.files[path] = {};
-            state.currentCourse.progress.files[path].duration = dur;
+            Object.assign(state.currentCourse.progress.files[path], {
+              duration: dur,
+              size: file.size || 0,
+              lastModified: file.lastModified || 0,
+              indexedAt: Date.now()
+            });
           }
           const savedPos = state.currentCourse.progress?.files?.[state.currentFile.path]?.position || 0;
           if (savedPos > 0 && savedPos < (dur || Infinity)) {
             state.player.currentTime = savedPos;
           }
           try { state.player.play(); } catch(e){}
-          if (state._peekCleanup) { state._peekCleanup(); state._peekCleanup = null; }
-          setupPeek(state.activeBlobUrl);
+          warmPlaybackBuffer(state.player);
+          setupPreviewThumbnails(state.currentFile, file, dur);
           setupAutoProceed();
         });
         state.player.on('timeupdate', () => {
           setPos(state.currentCourse, state.currentFile.path, state.player.currentTime, state.player.duration);
+          queueProgressSave(state.currentCourse, 2000);
         });
         state.player.on('pause', () => {
           if (onSaveProgress) onSaveProgress(state.currentCourse);
@@ -244,9 +285,17 @@ function renderNotesSection(entry) {
     ta.addEventListener('input', (e) => {
       state.noteText = e.target.value;
       if (preview) preview.innerHTML = mdToHtml(state.noteText);
-      saveCurrentNotes();
+      queueNotesSave();
     });
   }
+}
+
+function queueNotesSave() {
+  if (state.notesSaveTimer) clearTimeout(state.notesSaveTimer);
+  state.notesSaveTimer = setTimeout(() => {
+    state.notesSaveTimer = null;
+    saveCurrentNotes();
+  }, 500);
 }
 
 function saveCurrentNotes() {
@@ -257,6 +306,28 @@ function saveCurrentNotes() {
   c.progress.files[f.path].notes = state.noteText;
   c.progress.files[f.path].updatedAt = Date.now();
   if (onSaveProgress) onSaveProgress(c);
+}
+
+async function setupPreviewThumbnails(entry, file, duration) {
+  const course = state.currentCourse;
+  const path = entry?.path;
+  if (!course || !entry || !state.player || !duration) return;
+
+  try {
+    const bundle = await getPreviewThumbnails(course, entry, file, duration);
+    if (!bundle || state.currentFile?.path !== path || !state.player) {
+      cleanupPreviewThumbnails(bundle);
+      return;
+    }
+    cleanupPreviewThumbnails(state.activePreviewThumbs);
+    state.activePreviewThumbs = bundle;
+    state.player.setPreviewThumbnails({
+      enabled: true,
+      src: bundle.vttUrl
+    });
+  } catch (error) {
+    console.warn('[Lumina] Preview thumbnails unavailable for', path, error);
+  }
 }
 
 export function addBookmark() {
@@ -374,8 +445,19 @@ export function toggleFixedPlaybackSpeed(targetSpeed, cacheKey = null, showFeedb
 export function seekBy(seconds) {
   if (!state.player) return;
   const duration = Number.isFinite(state.player.duration) && state.player.duration > 0 ? state.player.duration : Infinity;
-  const current = Number.isFinite(state.player.currentTime) ? state.player.currentTime : 0;
-  state.player.currentTime = clamp(current + seconds, 0, duration);
+  const current = Number.isFinite(state.pendingSeekTarget) ? state.pendingSeekTarget : state.player.currentTime;
+  state.pendingSeekTarget = clamp(current + seconds, 0, duration);
+  if (state.seekRaf) cancelAnimationFrame(state.seekRaf);
+  state.seekRaf = requestAnimationFrame(() => {
+    const target = state.pendingSeekTarget;
+    state.seekRaf = null;
+    state.pendingSeekTarget = null;
+    const media = state.player?.media;
+    if (!media || !Number.isFinite(target)) return;
+    if (typeof media.fastSeek === 'function') media.fastSeek(target);
+    else state.player.currentTime = target;
+    warmPlaybackBuffer(state.player);
+  });
   showSeekFeedback(seconds);
 }
 
@@ -456,76 +538,6 @@ function triggerAutoProceed(fromEnd = false) {
     }
   }
   document.addEventListener('keydown', onEnter, true);
-}
-
-function setupPeek(url) {
-  const progressEl = document.querySelector('.plyr__progress');
-  if (!progressEl) return;
-
-  const peekVideo = document.createElement('video');
-  peekVideo.src = url; peekVideo.muted = true; peekVideo.preload = 'auto';
-  peekVideo.crossOrigin = 'anonymous';
-  peekVideo.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-  document.body.appendChild(peekVideo);
-  state.peekVideo = peekVideo;
-
-  const tooltip = document.createElement('div');
-  tooltip.className = 'seek-peek-tooltip';
-  tooltip.style.display = 'none';
-  tooltip.innerHTML = `<canvas id="peek-canvas" width="160" height="90"></canvas><div class="peek-time">00:00</div>`;
-  progressEl.appendChild(tooltip);
-
-  const canvas = tooltip.querySelector('#peek-canvas');
-  const ctx = canvas.getContext('2d');
-  let seekTimeout = null;
-  let pendingTime = 0;
-
-  const onSeeked = () => {
-    if (tooltip.style.display === 'none') return;
-    ctx.drawImage(peekVideo, 0, 0, 160, 90);
-    tooltip.querySelector('.peek-time').textContent = fmtTime(peekVideo.currentTime);
-  };
-  peekVideo.addEventListener('seeked', onSeeked);
-
-  const onMove = (e) => {
-    if (!state.player || !state.player.duration) return;
-    const rect = progressEl.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const x = clientX - rect.left;
-    const pct = Math.max(0, Math.min(1, x / rect.width));
-    const time = pct * state.player.duration;
-    pendingTime = time;
-
-    tooltip.style.display = 'block';
-    
-    // Bounds check to ensure tooltip stays inside the progress bar width bounds
-    const tx = Math.max(80, Math.min(rect.width - 80, x));
-    
-    tooltip.style.left = tx + 'px';
-    tooltip.style.top = '0px';
-    tooltip.querySelector('.peek-time').textContent = fmtTime(time);
-
-    clearTimeout(seekTimeout);
-    seekTimeout = setTimeout(() => {
-      if (peekVideo.readyState >= 1) peekVideo.currentTime = pendingTime;
-    }, 50);
-  };
-
-  const onLeave = () => { tooltip.style.display = 'none'; };
-
-  progressEl.addEventListener('mousemove', onMove);
-  progressEl.addEventListener('mouseleave', onLeave);
-  progressEl.addEventListener('touchmove', onMove, { passive: true });
-  progressEl.addEventListener('touchend', onLeave);
-
-  state._peekCleanup = () => {
-    progressEl.removeEventListener('mousemove', onMove);
-    progressEl.removeEventListener('mouseleave', onLeave);
-    progressEl.removeEventListener('touchmove', onMove);
-    progressEl.removeEventListener('touchend', onLeave);
-    peekVideo.removeEventListener('seeked', onSeeked);
-    tooltip.remove(); peekVideo.remove();
-  };
 }
 
 export function renderSubtitles() {

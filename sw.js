@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lumina-v3';
+const CACHE_NAME = 'lumina-v4';
 const SHELL_ASSETS = [
   './',
   'index.html',
@@ -44,23 +44,39 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
-  
-  // Exclude extension requests or API calls if any
-  if (url.protocol.startsWith('chrome-extension') || url.protocol === 'about:') return;
+
+  if (
+    request.method !== 'GET' ||
+    url.protocol.startsWith('chrome-extension') ||
+    url.protocol === 'about:' ||
+    url.protocol === 'blob:' ||
+    url.protocol === 'file:' ||
+    request.headers.has('range')
+  ) {
+    return;
+  }
+
+  const isShellAsset = SHELL_ASSETS.some(asset => {
+    const assetUrl = new URL(asset, self.location.href);
+    return assetUrl.href === url.href;
+  });
+
+  if (!isShellAsset) {
+    return;
+  }
 
   event.respondWith(
-    fetch(request)
-      .then(response => {
-        // Only cache successful responses for GET requests
-        if (request.method === 'GET' && response.status === 200) {
+    caches.match(request).then(cached => {
+      const network = fetch(request).then(response => {
+        if (response.status === 200) {
           const resClone = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(request, resClone));
         }
         return response;
-      })
-      .catch(() => caches.match(request).then(cached => {
-        if (cached) return cached;
-        if (request.mode === 'navigate') return caches.match('/index.html');
-      }))
+      });
+      return cached || network;
+    }).catch(() => {
+      if (request.mode === 'navigate') return caches.match('index.html');
+    })
   );
 });

@@ -3,8 +3,10 @@ import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
 import { render, updateSidebar, updateSidebarSelection, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
 import { cleanupMedia, loadFile, setSaveProgress, addBookmark, renderSubtitles, toggleComplete, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
+import { startLibraryMediaIndex, stopCourseMediaIndex, describeIndexProgress } from './media-index.js';
 
 const ENV_WARNING_DISMISS_KEY = 'lumina_env_warning_dismissed';
+const indexSaveTimers = new Map();
 
 function detectEnvironmentWarning() {
   const ua = navigator.userAgent || '';
@@ -124,6 +126,31 @@ async function writeProgress(course) {
 }
 setSaveProgress(writeProgress);
 
+function queueIndexedProgressSave(course) {
+  if (!course) return;
+  if (indexSaveTimers.has(course.id)) clearTimeout(indexSaveTimers.get(course.id));
+  indexSaveTimers.set(course.id, setTimeout(async () => {
+    indexSaveTimers.delete(course.id);
+    await writeProgress(course);
+    if (state.view === 'dashboard') render();
+    else if (state.view === 'player' && state.currentCourse?.id === course.id) {
+      updateSidebar();
+      updateTopBar();
+    }
+  }, 1200));
+}
+
+function startDurationIndexing() {
+  startLibraryMediaIndex(state.courses, {
+    onChange(course, info) {
+      if (info?.changed) {
+        console.log('[Lumina]', course.name, describeIndexProgress(course));
+        queueIndexedProgressSave(course);
+      }
+    }
+  });
+}
+
 window.addEventListener('lumina-toggle-done', (e) => {
   const c = state.courses.find(x => x.id === e.detail.courseId);
   if (c) writeProgress(c);
@@ -144,25 +171,36 @@ window.addEventListener('lumina-resize', () => {
   if (state.view === 'player') { updateSidebar(); updateTopBar(); renderSubtitles(); }
 });
 
+function isEditableShortcutTarget(target) {
+  return !!target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
+}
+
 window.addEventListener('keydown', (e) => {
   if (state.view !== 'player') return;
-  if (['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
+  if (isEditableShortcutTarget(e.target)) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  
+
+  let handled = true;
   const key = e.key.toLowerCase();
-  if (e.key === 'ArrowRight') { e.preventDefault(); nextFile(); }
-  else if (e.key === 'ArrowLeft') { e.preventDefault(); prevFile(); }
-  else if (key === 'b') { e.preventDefault(); addBookmark(); }
-  else if (key === '.') { e.preventDefault(); toggleComplete(); }
-  else if (key === 'r') { e.preventDefault(); toggleFixedPlaybackSpeed(1.0, 'r'); }
-  else if (key === 'g') { e.preventDefault(); toggleFixedPlaybackSpeed(1.8, 'g'); }
-  else if (key === 'h') { e.preventDefault(); toggleFixedPlaybackSpeed(2.5, 'h'); }
-  else if (key === 'y') { e.preventDefault(); toggleFixedPlaybackSpeed(3.0, 'y'); }
-  else if (key === 's') { e.preventDefault(); adjustPlaybackSpeed(-0.1); }
-  else if (key === 'd') { e.preventDefault(); adjustPlaybackSpeed(0.1); }
-  else if (key === 'z') { e.preventDefault(); seekBy(-10); }
-  else if (key === 'x') { e.preventDefault(); seekBy(10); }
-});
+  if (e.key === 'ArrowRight') nextFile();
+  else if (e.key === 'ArrowLeft') prevFile();
+  else if (key === 'b') addBookmark();
+  else if (key === '.' || key === 'c') toggleComplete();
+  else if (key === 'r') toggleFixedPlaybackSpeed(1.0, 'r');
+  else if (key === 'g') toggleFixedPlaybackSpeed(1.8, 'g');
+  else if (key === 'h') toggleFixedPlaybackSpeed(2.5, 'h');
+  else if (key === 'y') toggleFixedPlaybackSpeed(3.0, 'y');
+  else if (key === 's') adjustPlaybackSpeed(-0.1);
+  else if (key === 'd') adjustPlaybackSpeed(0.1);
+  else if (key === 'z') seekBy(-10);
+  else if (key === 'x') seekBy(10);
+  else handled = false;
+
+  if (handled) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);
 
 window.dismissEnvironmentWarning = function() {
   state.environmentWarningDismissed = true;
@@ -219,6 +257,7 @@ async function processNativeCourse(nativeHandle) {
 }
 
 export async function loadCourses() {
+  stopCourseMediaIndex();
   state.courses = await getCourses();
   for (const c of state.courses) {
     if (c.isNative && c.handle) {
@@ -235,12 +274,11 @@ export async function loadCourses() {
       await ensureProgress(c);
       c.tree = await scanDirectory(c.handle);
       c.flatFiles = flattenFiles(c.tree);
-      // Background duration pre-scan
-      preloadMissingDurations(c);
     } catch (e) {
       console.warn('Preload failed for', c.name, e);
     }
   }
+  startDurationIndexing();
 }
 
 async function ensureProgress(course) {
@@ -254,58 +292,6 @@ async function ensureProgress(course) {
     course.progress = { version: 1, files: {} };
   }
   if (!course.collapsed) course.collapsed = new Set();
-}
-
-async function getVideoDuration(file) {
-  return new Promise((resolve) => {
-    const url = file.nativeUrl || URL.createObjectURL(file);
-    const v = document.createElement('video');
-    v.preload = 'metadata';
-    v.muted = true;
-    v.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;';
-    
-    const cleanup = () => { URL.revokeObjectURL(url); v.remove(); };
-    const timeout = setTimeout(() => { cleanup(); resolve(0); }, 8000);
-    
-    v.onloadedmetadata = () => {
-      clearTimeout(timeout);
-      const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
-      cleanup();
-      resolve(dur);
-    };
-    v.onerror = () => {
-      clearTimeout(timeout);
-      cleanup();
-      resolve(0);
-    };
-    document.body.appendChild(v);
-    v.src = url;
-  });
-}
-
-async function preloadMissingDurations(course) {
-  const missing = course.flatFiles.filter(f => f.type === 'video' && !course.progress.files?.[f.path]?.duration);
-  if (!missing.length) return;
-  let changed = false;
-  for (const f of missing) {
-    try {
-      const file = await f.handle.getFile();
-      const dur = await getVideoDuration(file);
-      if (dur > 0) {
-        if (!course.progress.files[f.path]) course.progress.files[f.path] = {};
-        course.progress.files[f.path].duration = dur;
-        changed = true;
-      }
-    } catch (e) { console.warn('Duration scan failed for', f.name, e); }
-    await new Promise(r => setTimeout(r, 150)); // throttle
-  }
-  if (changed) {
-    await writeProgress(course);
-    if (state.view === 'dashboard') render();
-    else if (state.view === 'player' && state.currentCourse?.id === course.id) {
-      updateSidebar(); updateTopBar();
-    }
-  }
 }
 
 export async function openCourse(id, filePath = null, seekTime = 0) {
@@ -328,7 +314,6 @@ export async function openCourse(id, filePath = null, seekTime = 0) {
     course.tree = await scanDirectory(course.handle);
     course.flatFiles = flattenFiles(course.tree);
   }
-  preloadMissingDurations(course); // ensure any new files get scanned
 
   render();
 
