@@ -14,6 +14,7 @@ export const state = {
   player: null,
   saveTimer: null,
   lastRenderView: null,
+  lastRenderSubView: null,
   peekVideo: null,
   cueData: [],
   rightPanelOpen: true,

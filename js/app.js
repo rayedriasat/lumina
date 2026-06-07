@@ -1,7 +1,7 @@
 import { state, initGamification, setUsername } from './state.js';
 import { openDB, putCourse, getCourses, delCourse } from './db.js';
 import { scanDirectory, flattenFiles, fmtDuration, overallCourseProgress } from './fs.js';
-import { render, updateSidebar, updateSidebarSelection, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
+import { render, scheduleRender, updateSidebar, updateSidebarSelection, updateTopBar, toggleFolder, collapseAll, toggleDoneSidebar, toggleDesktopSidebar, toggleMobileSidebar, backToDashboard } from './render.js';
 import { cleanupMedia, loadFile, setSaveProgress, addBookmark, toggleFileSave, addTimestampBookmark, removeTimestampBookmark, isFileSaved, jumpToTimestamp, renderSubtitles, toggleComplete, toggleCaptions, loadFileByPath, nextFile, prevFile, toggleFixedPlaybackSpeed, adjustPlaybackSpeed, seekBy } from './player.js';
 import { startLibraryMediaIndex, stopCourseMediaIndex, describeIndexProgress, subscribeIndexingProgress } from './media-index.js';
 
@@ -137,7 +137,7 @@ function queueIndexedProgressSave(course) {
   indexSaveTimers.set(course.id, setTimeout(async () => {
     indexSaveTimers.delete(course.id);
     await writeProgress(course);
-    if (state.view === 'dashboard') render();
+    if (state.view === 'dashboard') scheduleRender();
     else if (state.view === 'player' && state.currentCourse?.id === course.id) {
       updateSidebar();
       updateTopBar();
@@ -173,7 +173,7 @@ subscribeIndexingProgress((course, info) => {
       if (dashboardRenderTimers.has(key)) return;
       dashboardRenderTimers.set(key, setTimeout(() => {
         dashboardRenderTimers.delete(key);
-        if (state.view === 'dashboard') render();
+        if (state.view === 'dashboard') scheduleRender();
       }, 600));
     }
   } else if (state.view === 'player' && state.currentCourse?.id === course.id) {

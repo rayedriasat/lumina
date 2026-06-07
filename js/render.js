@@ -6,14 +6,16 @@ import { overallProgress, isDone, isFileSaved, cleanupMedia, loadFile, renderSub
 export function render() {
   const app = document.getElementById('app');
   if (!app) return;
-  if (state.view !== state.lastRenderView || state.view === 'dashboard') {
+  if (state.view !== state.lastRenderView || state.subView !== state.lastRenderSubView || state.view === 'dashboard') {
     const dashboardScrollTop = state.view === 'dashboard' ? (app.firstElementChild?.scrollTop || 0) : 0;
     const dashboardScrollLeft = state.view === 'dashboard' ? (app.firstElementChild?.scrollLeft || 0) : 0;
+    const animate = state.view !== state.lastRenderView || state.subView !== state.lastRenderSubView;
     state.lastRenderView = state.view;
+    state.lastRenderSubView = state.subView;
     if (state.view === 'dashboard') {
-      if (state.subView === 'all-bookmarks') renderAllBookmarks(app);
-      else if (state.subView === 'all-notes') renderAllNotes(app);
-      else renderDashboard(app);
+      if (state.subView === 'all-bookmarks') renderAllBookmarks(app, { animate });
+      else if (state.subView === 'all-notes') renderAllNotes(app, { animate });
+      else renderDashboard(app, { animate });
     } else if (state.view === 'player') renderPlayer(app);
     if (state.view === 'dashboard') {
       const scrollHost = app.firstElementChild;
@@ -25,6 +27,22 @@ export function render() {
   } else if (state.view === 'player') {
     updateSidebar(); updateTopBar(); renderSubtitles();
   }
+}
+
+// Coalesce rapid render() calls into a single rAF-tick DOM update.
+// Background data updates (indexing progress, debounced saves, etc.) can
+// fire several render() calls within a few ms; without coalescing each
+// one replaces #app.innerHTML and replays the fade-in animation, which
+// produces the visible "jitter" on first load and during heavy work.
+// User-initiated renders should call render() directly so the UI updates
+// on the same click that triggered it.
+let renderRaf = null;
+export function scheduleRender() {
+  if (renderRaf != null) return;
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = null;
+    render();
+  });
 }
 
 function computeDashboardStats() {
@@ -76,7 +94,8 @@ function getAllNotes(limit = 20) {
 }
 
 // --- Gamified Dashboard Map ---
-function renderCourseMap(course) {
+function renderCourseMap(course, { animate = true } = {}) {
+  const mapAnimClass = animate ? 'animate-fade-in' : '';
   const stats = overallCourseProgress(course);
   const durDone = fmtDuration(stats.durationDone);
   const durTotal = fmtDuration(stats.durationTotal);
@@ -126,7 +145,7 @@ function renderCourseMap(course) {
   }
 
   return `
-    <div class="glass-panel rounded-2xl p-4 md:p-5 animate-fade-in">
+    <div class="glass-panel rounded-2xl p-4 md:p-5 ${mapAnimClass}">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-base font-bold text-slate-100 flex items-center gap-2">
           <span class="w-2 h-2 rounded-full bg-gradient-to-r from-indigo-400 to-purple-500 inline-block"></span>
@@ -435,9 +454,10 @@ window.jumpToBookmarkInCourse = (courseId, path, time) => {
 };
 
 function renderSubViewShell(app, opts) {
-  const { title, icon, query, html, placeholder } = opts;
+  const { title, icon, query, html, placeholder, animate = true } = opts;
+  const fadeClass = animate ? 'animate-fade-in' : '';
   app.innerHTML = `
-    <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
+    <div class="flex-1 overflow-auto ${fadeClass} custom-scrollbar">
       <div class="max-w-6xl mx-auto px-6 md:px-10 pt-8 md:pt-12 pb-10">
         <div class="flex items-center justify-between mb-6 gap-3">
           <div class="flex items-center gap-3 min-w-0">
@@ -464,7 +484,7 @@ function renderSubViewShell(app, opts) {
   }
 }
 
-export function renderAllBookmarks(app) {
+export function renderAllBookmarks(app, { animate = true } = {}) {
   cleanupMedia();
   const html = buildAllBookmarksHtml(state.subViewQuery);
   renderSubViewShell(app, {
@@ -472,11 +492,12 @@ export function renderAllBookmarks(app) {
     icon: Ico.bookmark,
     query: state.subViewQuery,
     html,
-    placeholder: 'Search by file, course, or folder…'
+    placeholder: 'Search by file, course, or folder…',
+    animate
   });
 }
 
-export function renderAllNotes(app) {
+export function renderAllNotes(app, { animate = true } = {}) {
   cleanupMedia();
   const html = buildAllNotesHtml(state.subViewQuery);
   renderSubViewShell(app, {
@@ -484,12 +505,14 @@ export function renderAllNotes(app) {
     icon: Ico.note,
     query: state.subViewQuery,
     html,
-    placeholder: 'Search notes by content, file, or course…'
+    placeholder: 'Search notes by content, file, or course…',
+    animate
   });
 }
 
-export function renderDashboard(app) {
+export function renderDashboard(app, { animate = true } = {}) {
   cleanupMedia();
+  const fadeClass = animate ? 'animate-fade-in' : '';
   const stats = computeDashboardStats();
   const envWarning = state.environmentWarning && !state.environmentWarningDismissed ? `
     <div class="mb-6 glass-panel rounded-2xl p-4 md:p-5 border border-amber-400/20 bg-amber-500/10">
@@ -551,7 +574,7 @@ export function renderDashboard(app) {
   `).join('');
 
   app.innerHTML = `
-    <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
+    <div class="flex-1 overflow-auto ${fadeClass} custom-scrollbar">
       <div class="relative overflow-hidden px-6 md:px-10 pt-8 md:pt-12 pb-6">
         <div class="max-w-6xl mx-auto">
           ${envWarning}
