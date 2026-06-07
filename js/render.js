@@ -6,14 +6,16 @@ import { overallProgress, isDone, isFileSaved, cleanupMedia, loadFile, renderSub
 export function render() {
   const app = document.getElementById('app');
   if (!app) return;
-  if (state.view !== state.lastRenderView || state.view === 'dashboard') {
+  if (state.view !== state.lastRenderView || state.subView !== state.lastRenderSubView || state.view === 'dashboard') {
     const dashboardScrollTop = state.view === 'dashboard' ? (app.firstElementChild?.scrollTop || 0) : 0;
     const dashboardScrollLeft = state.view === 'dashboard' ? (app.firstElementChild?.scrollLeft || 0) : 0;
+    const animate = state.view !== state.lastRenderView || state.subView !== state.lastRenderSubView;
     state.lastRenderView = state.view;
+    state.lastRenderSubView = state.subView;
     if (state.view === 'dashboard') {
-      if (state.subView === 'all-bookmarks') renderAllBookmarks(app);
-      else if (state.subView === 'all-notes') renderAllNotes(app);
-      else renderDashboard(app);
+      if (state.subView === 'all-bookmarks') renderAllBookmarks(app, { animate });
+      else if (state.subView === 'all-notes') renderAllNotes(app, { animate });
+      else renderDashboard(app, { animate });
     } else if (state.view === 'player') renderPlayer(app);
     if (state.view === 'dashboard') {
       const scrollHost = app.firstElementChild;
@@ -25,6 +27,22 @@ export function render() {
   } else if (state.view === 'player') {
     updateSidebar(); updateTopBar(); renderSubtitles();
   }
+}
+
+// Coalesce rapid render() calls into a single rAF-tick DOM update.
+// Background data updates (indexing progress, debounced saves, etc.) can
+// fire several render() calls within a few ms; without coalescing each
+// one replaces #app.innerHTML and replays the fade-in animation, which
+// produces the visible "jitter" on first load and during heavy work.
+// User-initiated renders should call render() directly so the UI updates
+// on the same click that triggered it.
+let renderRaf = null;
+export function scheduleRender() {
+  if (renderRaf != null) return;
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = null;
+    render();
+  });
 }
 
 function computeDashboardStats() {
@@ -76,7 +94,8 @@ function getAllNotes(limit = 20) {
 }
 
 // --- Gamified Dashboard Map ---
-function renderCourseMap(course) {
+function renderCourseMap(course, { animate = true } = {}) {
+  const mapAnimClass = animate ? 'animate-fade-in' : '';
   const stats = overallCourseProgress(course);
   const durDone = fmtDuration(stats.durationDone);
   const durTotal = fmtDuration(stats.durationTotal);
@@ -126,7 +145,7 @@ function renderCourseMap(course) {
   }
 
   return `
-    <div class="glass-panel rounded-2xl p-4 md:p-5 animate-fade-in">
+    <div class="glass-panel rounded-2xl p-4 md:p-5 ${mapAnimClass}">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-base font-bold text-slate-100 flex items-center gap-2">
           <span class="w-2 h-2 rounded-full bg-gradient-to-r from-indigo-400 to-purple-500 inline-block"></span>
@@ -435,9 +454,10 @@ window.jumpToBookmarkInCourse = (courseId, path, time) => {
 };
 
 function renderSubViewShell(app, opts) {
-  const { title, icon, query, html, placeholder } = opts;
+  const { title, icon, query, html, placeholder, animate = true } = opts;
+  const fadeClass = animate ? 'animate-fade-in' : '';
   app.innerHTML = `
-    <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
+    <div class="flex-1 overflow-auto ${fadeClass} custom-scrollbar">
       <div class="max-w-6xl mx-auto px-6 md:px-10 pt-8 md:pt-12 pb-10">
         <div class="flex items-center justify-between mb-6 gap-3">
           <div class="flex items-center gap-3 min-w-0">
@@ -464,7 +484,7 @@ function renderSubViewShell(app, opts) {
   }
 }
 
-export function renderAllBookmarks(app) {
+export function renderAllBookmarks(app, { animate = true } = {}) {
   cleanupMedia();
   const html = buildAllBookmarksHtml(state.subViewQuery);
   renderSubViewShell(app, {
@@ -472,11 +492,12 @@ export function renderAllBookmarks(app) {
     icon: Ico.bookmark,
     query: state.subViewQuery,
     html,
-    placeholder: 'Search by file, course, or folder…'
+    placeholder: 'Search by file, course, or folder…',
+    animate
   });
 }
 
-export function renderAllNotes(app) {
+export function renderAllNotes(app, { animate = true } = {}) {
   cleanupMedia();
   const html = buildAllNotesHtml(state.subViewQuery);
   renderSubViewShell(app, {
@@ -484,12 +505,14 @@ export function renderAllNotes(app) {
     icon: Ico.note,
     query: state.subViewQuery,
     html,
-    placeholder: 'Search notes by content, file, or course…'
+    placeholder: 'Search notes by content, file, or course…',
+    animate
   });
 }
 
-export function renderDashboard(app) {
+export function renderDashboard(app, { animate = true } = {}) {
   cleanupMedia();
+  const fadeClass = animate ? 'animate-fade-in' : '';
   const stats = computeDashboardStats();
   const envWarning = state.environmentWarning && !state.environmentWarningDismissed ? `
     <div class="mb-6 glass-panel rounded-2xl p-4 md:p-5 border border-amber-400/20 bg-amber-500/10">
@@ -551,7 +574,7 @@ export function renderDashboard(app) {
   `).join('');
 
   app.innerHTML = `
-    <div class="flex-1 overflow-auto animate-fade-in custom-scrollbar">
+    <div class="flex-1 overflow-auto ${fadeClass} custom-scrollbar">
       <div class="relative overflow-hidden px-6 md:px-10 pt-8 md:pt-12 pb-6">
         <div class="max-w-6xl mx-auto">
           ${envWarning}
@@ -704,7 +727,7 @@ export function updateTopBar() {
       <button onclick="window.toggleComplete()" class="${done ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'btn-ghost text-slate-300'} px-3 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-colors" id="btn-complete" title="Toggle complete (C)">
         ${done ? '✓ Completed' : 'Mark Complete'}
       </button>
-      ${showRightToggle ? `<button onclick="window.toggleRightPanel()" class="btn-ghost p-2 rounded-lg ${rightPanelOpen ? 'text-indigo-200 bg-indigo-500/15' : 'text-indigo-300'}" title="${rightPanelOpen ? 'Hide right panel' : 'Show right panel'}" aria-pressed="${rightPanelOpen}">${Ico.panelRight}</button>` : ''}
+      ${showRightToggle ? `<button onclick="window.toggleRightPanel()" class="btn-ghost p-2 rounded-lg ${rightPanelOpen ? 'text-indigo-200 bg-indigo-500/15' : 'text-indigo-300'}" title="Right panel" aria-pressed="${rightPanelOpen}">${Ico.panelRight}</button>` : ''}
       <button onclick="window.nextFile()" class="btn-ghost p-2 rounded-lg" title="Next">${Ico.next}</button>
     </div>
   `;
@@ -724,8 +747,13 @@ function fileDurationDisplay(course, path) {
   if (!pf || !pf.duration) return '';
   const dur = fmtDuration(pf.duration);
   const pos = pf.position ? fmtDuration(Math.min(pf.position, pf.duration)) : '';
-  if (pos) return `<span class="text-[10px] text-slate-500 font-mono ml-1 whitespace-nowrap">${pos} / ${dur}</span>`;
-  return `<span class="text-[10px] text-slate-500 font-mono ml-1 whitespace-nowrap">${dur}</span>`;
+  return pos ? `${pos} / ${dur}` : dur;
+}
+
+function fileDurationHtml(course, path) {
+  const text = fileDurationDisplay(course, path);
+  if (!text) return '';
+  return `<span class="text-[10px] text-slate-500 font-mono shrink-0 mr-2">${text}</span>`;
 }
 
 export function updateSidebar() {
@@ -758,6 +786,7 @@ export function updateSidebar() {
   const courseStats = overallCourseProgress(c);
 
   const build = (nodes, level = 0) => {
+    const indent = 12 + level * 14;
     return nodes.map(n => {
       if (n.kind === 'directory') {
         const isClosed = c.collapsed.has(n.path);
@@ -767,33 +796,34 @@ export function updateSidebar() {
         const total = fmtDuration(fp.durationTotal);
         return `
           <div class="sidebar-dir" data-path="${n.path.replace(/"/g, '&quot;')}">
-            <div onclick="window.toggleFolder('${n.path.replace(/'/g,"\\'")}')" class="flex items-center gap-2 px-3 py-2 text-slate-300 hover:bg-white/5 cursor-pointer select-none transition-colors rounded-lg mx-1" style="padding-left:${12 + level*14}px" title="${escapeHtml(n.name)}">
+            <div onclick="window.toggleFolder('${n.path.replace(/'/g,"\\'")}')" class="grid grid-cols-[20px_28px_auto_1fr] gap-1.5 items-center px-2 py-1.5 text-slate-300 hover:bg-white/5 cursor-pointer select-none transition-colors rounded-lg mx-1" style="padding-left:${indent}px" title="${escapeHtml(n.name)}">
               <span class="folder-caret ${isClosed?'closed':'open'} text-slate-500 shrink-0">${Ico.caret}</span>
-              ${Ico.folder}
-              <span class="text-sm font-medium truncate flex-1">${escapeHtml(n.name)}</span>
-              <span class="shrink-0">${circularProgressSVG(fp.weightedPct, 16, 2.5)}</span>
-              <span class="sidebar-folder-progress text-[10px] text-slate-500 font-mono shrink-0 ml-1">${watched} / ${total}</span>
-              <button onclick="event.stopPropagation(); window.toggleFolderDone('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 p-1 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-colors ml-1" title="Toggle folder complete">
-                ${fDone ? `<span class="text-emerald-400">${Ico.check}</span>` : Ico.circle}
+              <button onclick="event.stopPropagation(); window.toggleFolderDone('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-7 h-7 flex items-center justify-center p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-colors" title="Toggle folder complete">
+                ${fDone ? `<span class="text-emerald-400 text-[11px]">${Ico.check}</span>` : `<span class="text-slate-400 text-[11px]">${Ico.circle}</span>`}
               </button>
+              <span class="sidebar-folder-progress text-[9px] text-slate-500 font-mono shrink-0 text-right w-20">${watched} / ${total}</span>
+              <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                <span class="text-slate-400 shrink-0">${Ico.folder}</span>
+                <span class="text-xs font-medium truncate">${escapeHtml(n.name)}</span>
+              </div>
             </div>
-            <div class="tree-line ml-4 ${isClosed?'hidden':''}">${build(n.children, level+1)}</div>
+            <div class="tree-line ${isClosed?'hidden':''}" style="padding-left:${indent + 20}px">${build(n.children, level+1)}</div>
           </div>`;
       } else {
         if (['srt','vtt'].includes(n.type)) return '';
         const active = state.currentFile?.path === n.path ? 'active' : '';
         const done = isDone(c, n.path);
+        const durText = fileDurationDisplay(c, n.path);
         return `
-          <div class="flex items-center group sidebar-file" data-path="${n.path.replace(/"/g, '&quot;')}">
-            <div onclick="window.loadFileByPath('${n.path.replace(/'/g,"\\'")}')" class="file-item flex-1 flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none ${active}" style="padding-left:${12 + level*14}px" title="${escapeHtml(n.name)}">
-              ${sidebarItemIcon(n)}
-              <span class="text-sm truncate flex-1">${escapeHtml(n.name)}</span>
-              ${fileDurationDisplay(c, n.path)}
-              <span class="sidebar-file-check shrink-0">${done ? Ico.check : ''}</span>
-            </div>
-            <button onclick="event.stopPropagation(); window.toggleDoneSidebar('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 p-1.5 mr-1 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Toggle complete">
-              ${done ? `<span class="text-emerald-400">${Ico.check}</span>` : Ico.circle}
+          <div class="grid grid-cols-[28px_20px_1fr_auto] gap-1.5 items-center group sidebar-file" data-path="${n.path.replace(/"/g, '&quot;')}" style="padding-left:${indent}px">
+            <button onclick="event.stopPropagation(); window.toggleDoneSidebar('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-7 h-7 flex items-center justify-center p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-opacity" title="Toggle complete">
+              ${done ? `<span class="text-emerald-400 text-[11px]">${Ico.check}</span>` : `<span class="text-slate-400 text-[11px]">${Ico.circle}</span>`}
             </button>
+            <span class="shrink-0 w-5 flex justify-center">${sidebarItemIcon(n)}</span>
+            <div onclick="window.loadFileByPath('${n.path.replace(/'/g,"\\'")}')" class="file-item flex items-center gap-1.5 px-2 py-1 cursor-pointer select-none ${active} min-w-0" title="${escapeHtml(n.name)}">
+              <span class="text-xs truncate">${escapeHtml(n.name)}</span>
+            </div>
+            ${durText ? `<span class="text-[9px] text-slate-500 font-mono shrink-0 w-22 text-right">${durText}</span>` : '<span class="w-22"></span>'}
           </div>`;
       }
     }).join('');
@@ -882,8 +912,6 @@ function updateSidebarFile(path) {
   if (!item) return;
   const course = state.currentCourse;
   const done = isDone(course, path);
-  const checkEl = item.querySelector('.sidebar-file-check');
-  if (checkEl) checkEl.innerHTML = done ? Ico.check : '';
   const btn = item.querySelector('button[title="Toggle complete"]');
   if (btn) btn.innerHTML = done ? `<span class="text-emerald-400">${Ico.check}</span>` : Ico.circle;
   updateAncestorFolders(path);

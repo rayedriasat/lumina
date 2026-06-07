@@ -231,7 +231,7 @@ export async function loadFile(entry) {
   if (!viewerWrap) return;
 
   // Reset panels
-  state.rightPanelOpen = true;
+  state.rightPanelOpen = false;
   renderSubtitles();
 
   if (entry.type === 'video') {
