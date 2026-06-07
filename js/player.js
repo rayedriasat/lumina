@@ -613,11 +613,8 @@ function showResumeBanner(savedPos, dur) {
   div.className = 'lumina-resume-banner';
   div.innerHTML = `
     <div class="lumina-resume-banner-inner">
-      <div class="lumina-resume-banner-icon">${Ico.clock}</div>
-      <div class="lumina-resume-banner-text">
-        <div class="lumina-resume-banner-eyebrow">Resumed from <span class="lumina-resume-banner-time">${escapeHtml(fmtTime(savedPos))}</span>${dur ? ` <span class="lumina-resume-banner-of">of ${escapeHtml(fmtTime(dur))}</span>` : ''}</div>
-        <div class="lumina-resume-banner-hint">Press <kbd>Enter</kbd> or click Start over to begin from the beginning</div>
-      </div>
+      <span class="lumina-resume-banner-icon">${Ico.clock}</span>
+      <span class="lumina-resume-banner-eyebrow">Resumed <span class="lumina-resume-banner-time">${escapeHtml(fmtTime(savedPos))}</span></span>
       <button class="lumina-resume-banner-action" data-action="startover" title="Start over (Enter)">Start over</button>
       <button class="lumina-resume-banner-close" data-action="dismiss" title="Dismiss">${Ico.close}</button>
     </div>
@@ -1054,8 +1051,11 @@ function buildRightPanelHtml({ counts, source }) {
 }
 
 function buildCuesHtml() {
+  // Stash a lowercased copy of each cue's text on the row via a data
+  // attribute so the search filter never has to read/lowercase
+  // `textContent` (which forces layout) on every keystroke.
   return state.cueData.map((c, i) => `
-    <div class="px-3 py-2 hover:bg-white/5 cursor-pointer text-xs text-slate-300 border-b border-white/5 transition-colors" onclick="window.seekToCue(${i})">
+    <div class="px-3 py-2 hover:bg-white/5 cursor-pointer text-xs text-slate-300 border-b border-white/5 transition-colors" data-cue="${escapeHtml(c.text.toLowerCase())}" onclick="window.seekToCue(${i})">
       <div class="text-indigo-400 font-mono text-[11px] mb-1">${fmtTime(c.start)} → ${fmtTime(c.end)}</div>
       <div class="line-clamp-2">${escapeHtml(c.text)}</div>
     </div>
@@ -1124,14 +1124,24 @@ function wireRightPanelHandlers(host, { source }) {
   const close = host.querySelector('[data-rp-close]');
   if (close) close.addEventListener('click', () => window.toggleRightPanel());
 
-  // Captions search
+  // Captions search — debounced, and matches against the pre-lowercased
+  // `data-cue` attribute (set in buildCuesHtml) so no per-keystroke
+  // layout-thrashing textContent reads. rows are cached once.
   const input = host.querySelector('#' + inputId);
   if (input) {
+    let searchTimer = null;
+    let rows = null;
+    const runFilter = (q) => {
+      if (!rows) rows = host.querySelectorAll(`#${listId} > div`);
+      for (const item of rows) {
+        const hay = item.dataset.cue || '';
+        item.style.display = (!q || hay.includes(q)) ? '' : 'none';
+      }
+    };
     input.addEventListener('input', (e) => {
-      const q = e.target.value.toLowerCase();
-      host.querySelectorAll(`#${listId} > div`).forEach(item => {
-        item.style.display = item.textContent.toLowerCase().includes(q) ? '' : 'none';
-      });
+      const q = e.target.value.toLowerCase().trim();
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => runFilter(q), 120);
     });
   }
 

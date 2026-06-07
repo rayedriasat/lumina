@@ -29,17 +29,12 @@ const INDEX_IDLE_TIMEOUT = 1500;
 const META_READ_TIMEOUT_MS = 12000;
 const GENERATION_TIMEOUT_MS = 90000;
 
-const BUFFER_AHEAD_SECONDS = 180;          // target ahead-buffer for Z/X (3 min)
-const BUFFER_BEHIND_SECONDS = 180;         // target behind-buffer for Z/X (3 min)
-const BUFFER_RECHECK_INTERVAL_MS = 4000;   // how often we recheck ahead-buffer
-
 const MANIFEST_VERSION = 3;
 
 let activeIndexRun = 0;
 let activeThumbRun = 0;
 const progressListeners = new Set();
 const inMemoryBundles = new Map(); // path -> { vttUrl, spriteUrl, manifest }
-const bufferWarmTimers = new WeakMap();
 
 function ensureProgress(course) {
   if (!course.progress) course.progress = { version: 1, files: {} };
@@ -666,65 +661,31 @@ export function getBufferedAhead(player) {
   return Math.max(0, end - current);
 }
 
-// Hint the browser that we'd like it to keep a few minutes of media
-// pre-loaded. We only set the preload hint and the `fastSeek` window;
-// we never call play()/pause() ourselves. The "play and immediately
-// pause" trick we used to use here caused visible jitter on a paused
-// video (the user sees the playhead resume for ~100 ms then stop) and
-// triggered bounce-back glitches after a seek, so it is gone.
-export function warmPlaybackBuffer(player, seconds = BUFFER_AHEAD_SECONDS) {
+// Hint the browser to keep media pre-loaded so the next Z/X seek lands
+// on already-buffered data. We ONLY set the preload hint — we never call
+// play()/pause()/currentTime ourselves. The old "play and immediately
+// pause" trick caused visible jitter on a paused video and bounce-back
+// after a seek, so it is gone. During natural playback the browser
+// downloads chunks ahead of the playhead on its own.
+export function warmPlaybackBuffer(player) {
   const media = player?.media;
-  if (!media || !Number.isFinite(media.duration) || media.duration <= 0) return;
+  if (!media) return;
   try {
     media.preload = 'auto';
     media.setAttribute('preload', 'auto');
   } catch {}
-  // No-op: during natural playback the browser downloads chunks ahead
-  // of the playhead on its own. When the user is paused, the buffer
-  // is not required for the next Z/X, and actively trying to grow it
-  // is what produced the jitter.
-  void seconds;
 }
 
-export function attachBufferWarmer(player, seconds = BUFFER_AHEAD_SECONDS) {
-  const media = player?.media;
-  if (!media) return () => {};
-  detachBufferWarmer(player);
-
-  // Make sure the element is asking the browser to pre-load chunks.
-  try {
-    media.preload = 'auto';
-    media.setAttribute('preload', 'auto');
-  } catch {}
-
-  // Pure observer: just track the current buffered window in state so
-  // the UI can show / debug it. We do NOT call play(), pause(),
-  // currentTime =, or any other mutator — those were the source of
-  // the playback jitter and bounce-back after seeking.
-  const observe = () => {
-    if (!player || player.destroyed) return;
-    // No work to do — kept as a hook for future instrumentation.
-    void seconds;
-  };
-
-  const onProgress = () => observe();
-  const interval = setInterval(observe, BUFFER_RECHECK_INTERVAL_MS);
-  media.addEventListener('progress', onProgress);
-  setTimeout(observe, 250);
-
-  const detach = () => {
-    clearInterval(interval);
-    media.removeEventListener('progress', onProgress);
-    bufferWarmTimers.delete(player);
-  };
-  bufferWarmTimers.set(player, detach);
-  return detach;
+// Attach the preload hint for the active media. Returns a detach
+// function for API symmetry; there are no timers or listeners to tear
+// down (an earlier version ran a per-4s interval + 'progress' listener
+// that did no work — pure overhead on every playing video).
+export function attachBufferWarmer(player) {
+  warmPlaybackBuffer(player);
+  return () => {};
 }
 
-export function detachBufferWarmer(player) {
-  const detach = bufferWarmTimers.get(player);
-  if (detach) detach();
-}
+export function detachBufferWarmer() {}
 
 // --- Misc ---
 

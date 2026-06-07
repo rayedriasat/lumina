@@ -139,7 +139,7 @@ Lumina is **vanilla JavaScript (ES modules)** with no framework and no bundler a
 
 | Layer | Technology |
 |---|---|
-| **UI** | Vanilla JS + Tailwind CSS |
+| **UI** | Vanilla JS + Tailwind CSS (pre-compiled, static) |
 | **Video** | [Plyr](https://plyr.io) — speeds, captions, PiP, fullscreen |
 | **Subtitles** | Auto-detect `.srt`/`.vtt`, SRT→WebVTT conversion, searchable cues |
 | **Seek previews** | Background-generated single-sprite thumbnails (memory-friendly) |
@@ -159,7 +159,10 @@ lumina/
 ├── sw.js                 # Service Worker — offline app-shell cache
 ├── server.js             # Dev localhost server (port 3321)
 ├── build-web.js          # Copies a deployable bundle into dist/
+├── tailwind.config.js    # Tailwind content scan config
+├── tailwind.input.css    # Tailwind entry (@tailwind directives)
 ├── css/
+│   ├── tailwind.css      # Pre-compiled Tailwind output (generated)
 │   └── style.css         # Glassmorphism design system & animations
 ├── js/
 │   ├── app.js            # Entry point: boot, courses, SW, shortcuts
@@ -188,10 +191,19 @@ lumina/
 
 ## 📦 Building & Releasing
 
+### Styles (Tailwind)
+
+Tailwind is **pre-compiled to a static stylesheet** (`css/tailwind.css`) instead of running the in-browser CDN compiler — this removes ~400 KB of boot JavaScript and eliminates per-render style recompilation. Rebuild it whenever you change classes in `index.html` or `js/`:
+
+```bash
+npm run css          # one-off minified build
+npm run css:watch    # rebuild on save during development
+```
+
 ### Static web bundle
 
 ```bash
-npm run build
+npm run build        # runs `npm run css` first, then copies to dist/
 ```
 
 Produces a `dist/` folder ready for any static host (GitHub Pages, Vercel, Netlify).

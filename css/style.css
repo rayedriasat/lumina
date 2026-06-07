@@ -32,26 +32,29 @@ body {
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
 
-/* Glass utilities */
+/* Glass utilities.
+   Blur radii are intentionally modest: backdrop-filter forces an
+   offscreen pass on every paint, so smaller radii + higher background
+   opacity keep the frosted look while cutting GPU cost on scroll. */
 .glass {
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
 }
 
 .glass-panel {
-  background: rgba(30, 41, 59, 0.45);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: rgba(30, 41, 59, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255,255,255,0.06);
   box-shadow: 0 10px 40px rgba(0,0,0,0.35);
 }
 
 .glass-strong {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
@@ -81,9 +84,9 @@ body {
   to   { transform: scale(1); opacity: 1; }
 }
 
-.animate-fade-in { animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
-.animate-slide-up { animation: slideUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
-.animate-scale-in { animation: scaleIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.animate-fade-in { animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards; will-change: transform, opacity; }
+.animate-slide-up { animation: slideUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards; will-change: transform, opacity; }
+.animate-scale-in { animation: scaleIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards; will-change: transform, opacity; }
 
 /* Tree sidebar */
 .tree-line { border-left: 1px solid rgba(255,255,255,0.06); }
@@ -191,37 +194,39 @@ body {
 .lumina-player-feedback.forward { right: 0; justify-content: flex-end; }
 
 .lumina-seek-ring {
-  width: min(17rem, 40vw);
+  width: min(11rem, 30vw);
   aspect-ratio: 1;
   border-radius: 999px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
+  gap: 0.15rem;
   color: #fff;
+  /* Solid, self-visible disc — reads clearly over any video frame
+     without relying on backdrop-filter (which we dropped for perf). */
   background:
-    radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.12) 45%, transparent 72%),
-    rgba(15, 23, 42, 0.2);
-  border: 1px solid rgba(255,255,255,0.16);
-  box-shadow: 0 22px 70px rgba(0,0,0,0.45);
-  backdrop-filter: blur(2px);
+    radial-gradient(circle, rgba(30, 41, 59, 0.92) 0%, rgba(15, 23, 42, 0.82) 62%, rgba(15, 23, 42, 0.55) 100%);
+  border: 1px solid rgba(255,255,255,0.22);
+  box-shadow: 0 18px 50px rgba(0,0,0,0.55);
 }
 
-.backward .lumina-seek-ring { transform: translateX(-36%) scale(0.8); }
-.forward .lumina-seek-ring { transform: translateX(36%) scale(0.8); }
+.backward .lumina-seek-ring { transform: translateX(-30%) scale(0.82); }
+.forward .lumina-seek-ring { transform: translateX(30%) scale(0.82); }
 
 .lumina-seek-arrows {
-  font-size: clamp(2.2rem, 6vw, 4.5rem);
+  font-size: clamp(1.8rem, 5vw, 3.4rem);
   line-height: 0.8;
   font-weight: 800;
   letter-spacing: 0;
+  color: #fff;
   text-shadow: 0 2px 18px rgba(0,0,0,0.7);
 }
 
 .lumina-seek-seconds {
-  font-size: clamp(0.9rem, 2vw, 1.2rem);
+  font-size: clamp(0.85rem, 1.8vw, 1.1rem);
   font-weight: 700;
+  color: #e0e7ff;
   text-shadow: 0 1px 10px rgba(0,0,0,0.75);
 }
 
@@ -284,8 +289,7 @@ body {
   color: #fff;
   background:
     radial-gradient(circle at 50% 45%, rgba(239,68,68,0.16), transparent 28rem),
-    linear-gradient(90deg, rgba(0,0,0,0.92), rgba(0,0,0,0.56) 48%, rgba(0,0,0,0.88));
-  backdrop-filter: blur(4px);
+    linear-gradient(90deg, rgba(0,0,0,0.94), rgba(0,0,0,0.62) 48%, rgba(0,0,0,0.9));
   animation: luminaNextFadeIn 0.38s ease-out forwards;
   pointer-events: auto;
 }
@@ -569,40 +573,36 @@ body {
 .lumina-resume-banner-inner {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
-  padding: 0.65rem 0.75rem 0.65rem 1rem;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.32), rgba(168, 85, 247, 0.28));
-  border: 1px solid rgba(165, 180, 252, 0.35);
-  box-shadow: 0 18px 48px -12px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  gap: 0.6rem;
+  padding: 0.4rem 0.45rem 0.4rem 0.7rem;
+  border-radius: 999px;
+  /* Solid, high-contrast pill so the text is always legible over video,
+     without depending on backdrop-filter (dropped for perf). */
+  background: rgba(17, 24, 39, 0.92);
+  border: 1px solid rgba(165, 180, 252, 0.45);
+  box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.7);
   color: #f1f5f9;
 }
 
 .lumina-resume-banner-icon {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #c7d2fe;
+  width: 22px;
+  height: 22px;
+  color: #a5b4fc;
   flex-shrink: 0;
 }
-
-.lumina-resume-banner-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  line-height: 1.25;
-}
+.lumina-resume-banner-icon svg { width: 16px; height: 16px; }
 
 .lumina-resume-banner-eyebrow {
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: #e0e7ff;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  white-space: nowrap;
 }
 
 .lumina-resume-banner-time {
@@ -610,44 +610,15 @@ body {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  margin-left: 0.2rem;
-}
-
-.lumina-resume-banner-of {
-  color: rgba(226, 232, 240, 0.7);
-  font-weight: 600;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-.lumina-resume-banner-hint {
-  margin-top: 0.15rem;
-  font-size: 0.72rem;
-  color: rgba(226, 232, 240, 0.85);
-  font-weight: 500;
-}
-
-.lumina-resume-banner-hint kbd {
-  display: inline-block;
-  padding: 1px 6px;
-  margin: 0 2px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: #e0e7ff;
-  background: rgba(255, 255, 255, 0.14);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  line-height: 1;
 }
 
 .lumina-resume-banner-action {
   flex-shrink: 0;
-  padding: 0.45rem 0.85rem;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.95);
-  color: #4f46e5;
-  font-size: 0.78rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(129, 140, 248, 0.95);
+  color: #0b0f19;
+  font-size: 0.74rem;
   font-weight: 700;
   border: 0;
   cursor: pointer;
@@ -655,7 +626,7 @@ body {
 }
 
 .lumina-resume-banner-action:hover {
-  background: #fff;
+  background: #c7d2fe;
   transform: translateY(-1px);
 }
 
@@ -665,29 +636,30 @@ body {
 
 .lumina-resume-banner-close {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(241, 245, 249, 0.85);
   border: 0;
   cursor: pointer;
   transition: background 0.15s ease;
 }
+.lumina-resume-banner-close svg { width: 14px; height: 14px; }
 
 .lumina-resume-banner-close:hover {
   background: rgba(255, 255, 255, 0.18);
 }
 
 .lumina-resume-banner-progress {
-  height: 3px;
-  background: rgba(255, 255, 255, 0.16);
-  border-radius: 0 0 14px 14px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
   overflow: hidden;
-  margin-top: -1px;
+  margin: 2px 0.7rem 0;
 }
 
 .lumina-resume-banner-progress > span {
@@ -714,12 +686,10 @@ body {
     top: 0.5rem;
   }
   .lumina-resume-banner-inner {
-    padding: 0.55rem 0.6rem 0.55rem 0.75rem;
-    gap: 0.6rem;
+    padding: 0.35rem 0.4rem 0.35rem 0.6rem;
+    gap: 0.5rem;
   }
-  .lumina-resume-banner-icon { width: 26px; height: 26px; }
-  .lumina-resume-banner-hint { display: none; }
-  .lumina-resume-banner-action { padding: 0.4rem 0.65rem; font-size: 0.72rem; }
+  .lumina-resume-banner-action { padding: 0.3rem 0.6rem; font-size: 0.72rem; }
 }
 
 /* --- Right panel tabs (Subtitles / Bookmarks) --- */
@@ -1101,5 +1071,34 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 4px;
   margin: 0 1px;
+}
+
+/* --- Performance & accessibility --- */
+
+/* Graceful fallback: if the browser can't do backdrop-filter, fall back
+   to a more opaque solid so panels stay readable (no see-through text). */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass { background: rgba(15, 23, 42, 0.92); }
+  .glass-panel { background: rgba(30, 41, 59, 0.94); }
+  .glass-strong { background: rgba(15, 23, 42, 0.96); }
+  .right-panel { background: rgba(15, 23, 42, 0.94); }
+}
+
+/* Respect users who ask for reduced motion: keep state changes but cut
+   the long transform/opacity animations to near-instant. Functionality
+   (countdowns, progress bars) still works.
+   IMPORTANT: the player seek/speed feedback overlays are EXCLUDED — they
+   start at opacity:0 and rely on their flash animation to ever become
+   visible, so collapsing the duration here would silently hide them.
+   They are short, transform-light glow flashes and are kept intact. */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.lumina-player-feedback):not(.lumina-speed-feedback):not(.lumina-seek-ring),
+  *:not(.lumina-player-feedback):not(.lumina-speed-feedback)::before,
+  *:not(.lumina-player-feedback):not(.lumina-speed-feedback)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 

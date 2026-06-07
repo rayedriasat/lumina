@@ -1,7 +1,8 @@
-const CACHE_NAME = 'lumina-v5';
+const CACHE_NAME = 'lumina-v6';
 const SHELL_ASSETS = [
   './',
   'index.html',
+  'css/tailwind.css',
   'css/style.css',
   'js/app.js',
   'js/state.js',
@@ -15,7 +16,6 @@ const SHELL_ASSETS = [
   'js/pdf-viewer.js',
   'vendor/plyr.css',
   'vendor/plyr.js',
-  'vendor/tailwindcss.js',
   'vendor/pdfjs.min.mjs',
   'vendor/pdfjs.worker.min.mjs',
   'vendor/pdf_viewer.css',
