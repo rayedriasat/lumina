@@ -19,7 +19,7 @@ export const state = {
   cueData: [],
   rightPanelOpen: false,
   rightPanelTab: 'subtitles',
-  sidebarWidth: 288,
+  sidebarWidth: 280,
   noteText: '',
   autoProceedTimer: null,
   progressSaveTimer: null,

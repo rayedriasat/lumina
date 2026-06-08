@@ -770,8 +770,8 @@ export function updateSidebar() {
   if (!isMob) {
     if (state.sidebarOpen) {
       el.className = 'shrink-0 glass border-r border-white/10 flex flex-col h-full relative';
-      el.style.width = (state.sidebarWidth || 340) + 'px';
-      el.style.minWidth = (state.sidebarWidth || 340) + 'px';
+      el.style.width = (state.sidebarWidth || 280) + 'px';
+      el.style.minWidth = (state.sidebarWidth || 280) + 'px';
     } else {
       el.className = 'hidden';
       el.style.width = '';
@@ -786,44 +786,63 @@ export function updateSidebar() {
   const courseStats = overallCourseProgress(c);
 
   const build = (nodes, level = 0) => {
-    const indent = 12 + level * 14;
-    return nodes.map(n => {
+    const indent = level * 2;
+    const showTreeLine = level > 0;
+    return nodes.map((n, i, arr) => {
+      const isLast = i === arr.length - 1;
       if (n.kind === 'directory') {
         const isClosed = c.collapsed.has(n.path);
         const fp = folderProgress(n, c);
         const fDone = isFolderDone(n, c);
-        const watched = fmtDuration(fp.durationDone);
-        const total = fmtDuration(fp.durationTotal);
+        const watched = fp.durationDone > 0 ? fmtDuration(fp.durationDone) : '0s';
+        const total = fp.durationTotal > 0 ? fmtDuration(fp.durationTotal) : '0s';
+        const durStr = `${watched} / ${total}`;
+        const folderPct = fp.weightedPct;
+        const showProgress = folderPct > 0 && folderPct < 100;
+        const progressSvg = showProgress ? circularProgressSVG(folderPct, 16, 2.5) : '';
         return `
           <div class="sidebar-dir" data-path="${n.path.replace(/"/g, '&quot;')}">
-            <div onclick="window.toggleFolder('${n.path.replace(/'/g,"\\'")}')" class="grid grid-cols-[20px_28px_auto_1fr] gap-1.5 items-center px-2 py-1.5 text-slate-300 hover:bg-white/5 cursor-pointer select-none transition-colors rounded-lg mx-1" style="padding-left:${indent}px" title="${escapeHtml(n.name)}">
-              <span class="folder-caret ${isClosed?'closed':'open'} text-slate-500 shrink-0">${Ico.caret}</span>
-              <button onclick="event.stopPropagation(); window.toggleFolderDone('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-7 h-7 flex items-center justify-center p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-colors" title="Toggle folder complete">
-                ${fDone ? `<span class="text-emerald-400 text-[11px]">${Ico.check}</span>` : `<span class="text-slate-400 text-[11px]">${Ico.circle}</span>`}
-              </button>
-              <span class="sidebar-folder-progress text-[9px] text-slate-500 font-mono shrink-0 text-right w-20">${watched} / ${total}</span>
-              <div class="flex items-center gap-1.5 min-w-0 flex-1">
-                <span class="text-slate-400 shrink-0">${Ico.folder}</span>
-                <span class="text-xs font-medium truncate">${escapeHtml(n.name)}</span>
+            <div class="flex gap-1 py-1 text-slate-300 hover:bg-white/5 cursor-pointer select-none transition-colors rounded" style="padding-left:${indent}px" title="${escapeHtml(n.name)}" data-tree-line="${showTreeLine && !isLast}">
+              <div class="flex flex-col items-center justify-center shrink-0 w-6 h-10">
+                <span class="folder-caret ${isClosed?'closed':'open'} text-slate-500 text-[10px]">${Ico.caret}</span>
+                <button onclick="event.stopPropagation(); window.toggleFolderDone('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-6 h-6 flex items-center justify-center p-0 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-colors mt-0.5" title="Toggle folder complete" aria-label="Toggle folder complete">
+                  ${fDone ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : showProgress ? progressSvg : `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`}
+                </button>
+              </div>
+              <div onclick="window.toggleFolder('${n.path.replace(/'/g,"\\'")}')" class="flex-1 min-w-0 cursor-pointer" title="${escapeHtml(n.name)}">
+                <div class="flex items-start gap-1 text-[11px] font-medium" style="white-space: nowrap; overflow: visible;">
+                  <span class="text-slate-400 shrink-0 text-[10px] p-0.5">${Ico.folder}</span>
+                  <div class="min-w-0">
+                    <span class="truncate block">${escapeHtml(n.name)}</span>
+                    ${durStr ? `<span class="text-[9px] text-slate-500 font-mono block mt-0.5">${durStr}</span>` : ''}
+                  </div>
+                </div>
               </div>
             </div>
-            <div class="tree-line ${isClosed?'hidden':''}" style="padding-left:${indent + 20}px">${build(n.children, level+1)}</div>
+            <div class="tree-children ${isClosed?'hidden':''}" style="padding-left:${indent + 2}px; border-left: 1px solid rgba(255,255,255,0.03); margin-left: 3px;">${build(n.children, level+1)}</div>
           </div>`;
       } else {
         if (['srt','vtt'].includes(n.type)) return '';
         const active = state.currentFile?.path === n.path ? 'active' : '';
         const done = isDone(c, n.path);
-        const durText = fileDurationDisplay(c, n.path);
+        const pf = c.progress?.files?.[n.path];
+        const dur = pf?.duration ? fmtDuration(pf.duration) : '';
+        const pos = pf?.position ? fmtDuration(Math.min(pf.position, pf.duration)) : '0s';
+        const durStr = dur ? `${pos} / ${dur}` : '';
         return `
-          <div class="grid grid-cols-[28px_20px_1fr_auto] gap-1.5 items-center group sidebar-file" data-path="${n.path.replace(/"/g, '&quot;')}" style="padding-left:${indent}px">
-            <button onclick="event.stopPropagation(); window.toggleDoneSidebar('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-7 h-7 flex items-center justify-center p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-opacity" title="Toggle complete">
-              ${done ? `<span class="text-emerald-400 text-[11px]">${Ico.check}</span>` : `<span class="text-slate-400 text-[11px]">${Ico.circle}</span>`}
+          <div class="flex gap-1 py-1 sidebar-file" data-path="${n.path.replace(/"/g, '&quot;')}" style="padding-left:${indent + 10}px" data-tree-line="${showTreeLine && !isLast}">
+            <button onclick="event.stopPropagation(); window.toggleDoneSidebar('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-6 h-10 flex flex-col items-center justify-center p-0 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-opacity" title="Toggle complete" aria-label="Toggle complete">
+              ${done ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`}
             </button>
-            <span class="shrink-0 w-5 flex justify-center">${sidebarItemIcon(n)}</span>
-            <div onclick="window.loadFileByPath('${n.path.replace(/'/g,"\\'")}')" class="file-item flex items-center gap-1.5 px-2 py-1 cursor-pointer select-none ${active} min-w-0" title="${escapeHtml(n.name)}">
-              <span class="text-xs truncate">${escapeHtml(n.name)}</span>
+            <div onclick="window.loadFileByPath('${n.path.replace(/'/g,"\\'")}')" class="file-item flex-1 min-w-0 cursor-pointer select-none ${active}" title="${escapeHtml(n.name)}">
+              <div class="flex items-start gap-1 text-[11px]" style="white-space: nowrap; overflow: visible;">
+                <span class="text-slate-400 shrink-0 text-[10px] p-0.5">${sidebarItemIcon(n)}</span>
+                <div class="min-w-0">
+                  <span class="truncate block">${escapeHtml(n.name)}</span>
+                  ${durStr ? `<span class="text-[9px] text-slate-500 font-mono block mt-0.5">${durStr}</span>` : ''}
+                </div>
+              </div>
             </div>
-            ${durText ? `<span class="text-[9px] text-slate-500 font-mono shrink-0 w-22 text-right">${durText}</span>` : '<span class="w-22"></span>'}
           </div>`;
       }
     }).join('');
@@ -843,8 +862,8 @@ export function updateSidebar() {
           <span class="text-[11px] text-emerald-400 font-medium bg-emerald-400/10 px-2 py-1 rounded-full">${courseStats.weightedPct}%</span>
         </div>
       </div>
-      <div id="sidebar-content" class="flex-1 overflow-auto py-2 text-[13px] md:text-sm">
-        ${build(c.tree)}
+      <div id="sidebar-content" class="flex-1 overflow-x-auto overflow-y-auto py-2 text-[13px] md:text-sm" style="white-space: nowrap;">
+        <div class="sidebar-inner min-w-full" style="min-width: max(100%, 500px);">${build(c.tree)}</div>
       </div>
       ${isMob ? `
       <div class="p-3 border-t border-white/10 shrink-0">
@@ -931,13 +950,11 @@ function updateAncestorFolders(path) {
         const fDone = isFolderDone(node, course);
         const badge = dirEl.querySelector('.sidebar-folder-progress');
         if (badge) badge.innerHTML = `${fmtDuration(fp.durationDone)} / ${fmtDuration(fp.durationTotal)}`;
-        const prog = dirEl.querySelector('svg');
-        if (prog) {
-          const newSvg = circularProgressSVG(fp.weightedPct, 16, 2.5);
-          prog.outerHTML = newSvg;
-        }
         const btn = dirEl.querySelector('button[title="Toggle folder complete"]');
-        if (btn) btn.innerHTML = fDone ? `<span class="text-emerald-400">${Ico.check}</span>` : Ico.circle;
+        if (btn) {
+          const showProgress = fp.weightedPct > 0 && fp.weightedPct < 100;
+          btn.innerHTML = fDone ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : showProgress ? circularProgressSVG(fp.weightedPct, 16, 2.5) : `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`;
+        }
       }
     }
   }

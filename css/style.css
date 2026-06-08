@@ -91,8 +91,39 @@ body {
 /* Tree sidebar */
 .tree-line { border-left: 1px solid rgba(255,255,255,0.06); }
 
-.folder-caret { transition: transform 0.2s ease; display: inline-flex; }
-.folder-caret.closed { transform: rotate(-90deg); }
+.tree-children { position: relative; }
+.tree-children::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255,255,255,0.04);
+}
+
+.sidebar-dir > div[data-tree-line="true"],
+.sidebar-file[data-tree-line="true"] {
+  position: relative;
+}
+.sidebar-dir > div[data-tree-line="true"]::before,
+.sidebar-file[data-tree-line="true"]::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255,255,255,0.04);
+}
+
+.sidebar-inner {
+  min-width: 100%;
+  padding-right: 16px;
+}
+
+.folder-caret { transition: transform 0.2s ease; display: inline-flex; transform: rotate(90deg); }
+.folder-caret.closed { transform: rotate(0deg); }
 
 .file-item {
   transition: background 0.15s ease, border-color 0.15s ease;
