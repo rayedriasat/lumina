@@ -71,6 +71,7 @@ function onPlyrEnded() {
   if (!state.currentCourse || !state.currentFile) return;
   setDone(state.currentCourse, state.currentFile.path, true);
   if (onSaveProgress) onSaveProgress(state.currentCourse);
+  window.dispatchEvent(new CustomEvent('lumina-progress-updated'));
   triggerAutoProceed(true);
 }
 function onPlyrDestroy() {
@@ -134,7 +135,13 @@ export function isDone(course, path) {
 export function setDone(course, path, val) {
   ensureProgress(course);
   if (!course.progress.files[path]) course.progress.files[path] = {};
-  course.progress.files[path].completed = val;
+  const fileProgress = course.progress.files[path];
+  fileProgress.completed = val;
+  if (val) {
+    fileProgress.position = fileProgress.duration || 0;
+  } else {
+    fileProgress.position = 0;
+  }
   if (onSaveProgress) onSaveProgress(course);
 }
 export function setPos(course, path, pos, dur) {
@@ -214,7 +221,8 @@ export async function loadFile(entry) {
     state.cueData = [];
     if (state._peekCleanup) { try { state._peekCleanup(); } catch {} state._peekCleanup = null; }
     if (state.peekVideo) { state.peekVideo = null; }
-    if (state.autoProceedTimer) { clearTimeout(state.autoProceedTimer); clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
+  if (state.autoProceedRaf) { cancelAnimationFrame(state.autoProceedRaf); state.autoProceedRaf = null; }
     if (state.thumbJob) { state.thumbJob.cancelled = true; state.thumbJob = null; }
     if (state.bufferWarmDetach) { try { state.bufferWarmDetach(); } catch {} state.bufferWarmDetach = null; }
     document.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
@@ -878,14 +886,11 @@ function triggerAutoProceed(fromEnd = false) {
 
   const shell = getPlayerShell();
   if (!shell) return;
-  // Cancel any previous auto-proceed before starting a new one. This
-  // also removes its keydown listener so we never end up with multiple
-  // capture-phase Enter listeners stacking across video transitions.
   if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
   if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
   shell.querySelectorAll('.lumina-auto-proceed').forEach(el => el.remove());
-  let seconds = 5;
-  const totalSeconds = seconds;
+  const totalSeconds = 3;
+  let elapsed = 0;
   const div = document.createElement('div');
   div.className = 'lumina-auto-proceed';
   div.innerHTML = `
@@ -895,7 +900,7 @@ function triggerAutoProceed(fromEnd = false) {
         <span class="lumina-next-play-inner">${Ico.play}</span>
       </button>
       <div class="lumina-next-copy">
-        <div class="lumina-next-eyebrow">Up next in <span id="ap-count">${seconds}</span></div>
+        <div class="lumina-next-eyebrow">Up next in <span id="ap-count">${totalSeconds}</span></div>
         <h3>${escapeHtml(next.name)}</h3>
         <div class="lumina-next-actions">
           <button id="ap-cancel" class="lumina-next-secondary">Cancel</button>
@@ -907,14 +912,16 @@ function triggerAutoProceed(fromEnd = false) {
   shell.appendChild(div);
 
   function cancelProceed() {
-    clearInterval(state.autoProceedTimer); state.autoProceedTimer = null;
+    if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
     if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
+    if (state.autoProceedRaf) { cancelAnimationFrame(state.autoProceedRaf); state.autoProceedRaf = null; }
     div.remove();
   }
 
   function proceedNow() {
-    clearInterval(state.autoProceedTimer); state.autoProceedTimer = null;
+    if (state.autoProceedTimer) { clearInterval(state.autoProceedTimer); state.autoProceedTimer = null; }
     if (state.autoProceedKeydown) { try { document.removeEventListener('keydown', state.autoProceedKeydown, true); } catch {} state.autoProceedKeydown = null; }
+    if (state.autoProceedRaf) { cancelAnimationFrame(state.autoProceedRaf); state.autoProceedRaf = null; }
     div.classList.add('lumina-auto-proceed--launching');
     setTimeout(() => {
       div.remove();
@@ -922,17 +929,24 @@ function triggerAutoProceed(fromEnd = false) {
     }, 380);
   }
 
-  state.autoProceedTimer = setInterval(() => {
-    seconds--;
+  const startTime = Date.now();
+  function tick() {
+    elapsed = (Date.now() - startTime) / 1000;
+    const remaining = Math.max(0, Math.ceil(totalSeconds - elapsed));
     const num = document.getElementById('ap-count');
-    if (num) num.textContent = seconds;
-    const progress = ((totalSeconds - seconds) / totalSeconds) * 100;
+    if (num) num.textContent = remaining;
+    const progress = Math.min(100, (elapsed / totalSeconds) * 100);
     const bar = document.getElementById('ap-progress');
     const play = div.querySelector('.lumina-next-play');
     if (bar) bar.style.width = `${progress}%`;
     if (play) play.style.setProperty('--ap-progress', `${progress}%`);
-    if (seconds <= 0) proceedNow();
-  }, 1000);
+    if (elapsed >= totalSeconds) {
+      proceedNow();
+      return;
+    }
+    state.autoProceedRaf = requestAnimationFrame(tick);
+  }
+  state.autoProceedRaf = requestAnimationFrame(tick);
 
   div.querySelector('#ap-cancel').onclick = cancelProceed;
   div.querySelector('#ap-now').onclick = proceedNow;

@@ -22,6 +22,7 @@ export const state = {
   sidebarWidth: 280,
   noteText: '',
   autoProceedTimer: null,
+  autoProceedRaf: null,
   progressSaveTimer: null,
   notesSaveTimer: null,
   pdfDoc: null,

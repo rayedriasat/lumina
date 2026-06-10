@@ -707,6 +707,7 @@ export function updateTopBar() {
   const done = c && cur ? isDone(c, cur.path) : false;
   const p = c ? overallCourseProgress(c) : {};
   const durDisplay = p.durationTotal ? `${fmtDuration(p.durationDone)} / ${fmtDuration(p.durationTotal)}` : '';
+  const progressPct = p.weightedPct || 0;
   const hasSubs = state.cueData.length > 0 && cur?.type === 'video';
   const hasBookmarks = c && cur ? isFileSaved(c, cur.path) || (c.progress?.files?.[cur.path]?.bookmarks?.length > 0) : false;
   const showRightToggle = hasSubs || hasBookmarks;
@@ -722,7 +723,12 @@ export function updateTopBar() {
       </div>
     </div>
     <div class="flex items-center gap-2 md:gap-3 shrink-0 pl-2">
-      <span class="hidden md:inline text-xs text-slate-500 font-medium whitespace-nowrap">${durDisplay}</span>
+      <div class="hidden md:flex flex-col items-end gap-1 min-w-[140px]">
+        <span class="text-xs text-slate-500 font-medium whitespace-nowrap">${durDisplay}</span>
+        <div class="w-full h-1.5 bg-slate-700/50 rounded-full overflow-hidden" style="min-width: 120px;">
+          <div class="h-full rounded-full transition-all duration-500" style="width:${progressPct}%; background: linear-gradient(90deg, #818cf8, #34d399)"></div>
+        </div>
+      </div>
       <button onclick="window.prevFile()" class="btn-ghost p-2 rounded-lg" title="Previous">${Ico.prev}</button>
       <button onclick="window.toggleComplete()" class="${done ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'btn-ghost text-slate-300'} px-3 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-colors" id="btn-complete" title="Toggle complete (C)">
         ${done ? '✓ Completed' : 'Mark Complete'}
@@ -798,7 +804,7 @@ export function updateSidebar() {
         const total = fp.durationTotal > 0 ? fmtDuration(fp.durationTotal) : '0s';
         const durStr = `${watched} / ${total}`;
         const folderPct = fp.weightedPct;
-        const showProgress = folderPct > 0 && folderPct < 100;
+        const showProgress = folderPct > 0;
         const progressSvg = showProgress ? circularProgressSVG(folderPct, 16, 2.5) : '';
         return `
           <div class="sidebar-dir" data-path="${n.path.replace(/"/g, '&quot;')}">
@@ -806,7 +812,7 @@ export function updateSidebar() {
               <div class="flex flex-col items-center justify-center shrink-0 w-6 h-10">
                 <span class="folder-caret ${isClosed?'closed':'open'} text-slate-500 text-[10px]">${Ico.caret}</span>
                 <button onclick="event.stopPropagation(); window.toggleFolderDone('${n.path.replace(/'/g,"\\'")}')" class="shrink-0 w-6 h-6 flex items-center justify-center p-0 rounded hover:bg-white/10 text-slate-500 hover:text-emerald-400 transition-colors mt-0.5" title="Toggle folder complete" aria-label="Toggle folder complete">
-                  ${fDone ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : showProgress ? progressSvg : `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`}
+                  ${fDone ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : progressSvg || `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`}
                 </button>
               </div>
               <div onclick="window.toggleFolder('${n.path.replace(/'/g,"\\'")}')" class="flex-1 min-w-0 cursor-pointer" title="${escapeHtml(n.name)}">
@@ -933,6 +939,19 @@ function updateSidebarFile(path) {
   const done = isDone(course, path);
   const btn = item.querySelector('button[title="Toggle complete"]');
   if (btn) btn.innerHTML = done ? `<span class="text-emerald-400">${Ico.check}</span>` : Ico.circle;
+  const pf = course.progress?.files?.[path];
+  const dur = pf?.duration ? fmtDuration(pf.duration) : '';
+  const pos = pf?.position ? fmtDuration(Math.min(pf.position, pf.duration)) : '0s';
+  const durStr = dur ? `${pos} / ${dur}` : '';
+  const durEl = item.querySelector('.file-item > div > div > span:last-child');
+  if (durEl && durEl.classList.contains('font-mono')) {
+    durEl.textContent = durStr;
+  } else {
+    const nameEl = item.querySelector('.file-item .truncate.block');
+    if (nameEl && nameEl.nextElementSibling) {
+      nameEl.nextElementSibling.textContent = durStr;
+    }
+  }
   updateAncestorFolders(path);
 }
 
@@ -952,8 +971,9 @@ function updateAncestorFolders(path) {
         if (badge) badge.innerHTML = `${fmtDuration(fp.durationDone)} / ${fmtDuration(fp.durationTotal)}`;
         const btn = dirEl.querySelector('button[title="Toggle folder complete"]');
         if (btn) {
-          const showProgress = fp.weightedPct > 0 && fp.weightedPct < 100;
-          btn.innerHTML = fDone ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : showProgress ? circularProgressSVG(fp.weightedPct, 16, 2.5) : `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`;
+          const showProgress = fp.weightedPct > 0;
+          const progressSvg = showProgress ? circularProgressSVG(fp.weightedPct, 16, 2.5) : '';
+          btn.innerHTML = fDone ? `<span class="text-emerald-400 text-[10px]">${Ico.check}</span>` : progressSvg || `<span class="text-slate-400 text-[10px]">${Ico.circle}</span>`;
         }
       }
     }
@@ -1000,7 +1020,13 @@ export function toggleDoneSidebar(path) {
   if (!c) return;
   const val = !isDone(c, path);
   if (!c.progress.files[path]) c.progress.files[path] = {};
-  c.progress.files[path].completed = val;
+  const fileProgress = c.progress.files[path];
+  fileProgress.completed = val;
+  if (val) {
+    fileProgress.position = fileProgress.duration || 0;
+  } else {
+    fileProgress.position = 0;
+  }
   window.dispatchEvent(new CustomEvent('lumina-toggle-done', { detail: { courseId: c.id, path, val } }));
   updateSidebarFile(path);
   updateTopBar();
@@ -1015,7 +1041,13 @@ export function toggleFolderDone(path) {
   const targetVal = !isFolderDone(node, c);
   for (const f of files) {
     if (!c.progress.files[f.path]) c.progress.files[f.path] = {};
-    c.progress.files[f.path].completed = targetVal;
+    const fileProgress = c.progress.files[f.path];
+    fileProgress.completed = targetVal;
+    if (targetVal) {
+      fileProgress.position = fileProgress.duration || 0;
+    } else {
+      fileProgress.position = 0;
+    }
   }
   window.dispatchEvent(new CustomEvent('lumina-toggle-done', { detail: { courseId: c.id, path, val: targetVal, batch: true } }));
   for (const f of files) updateSidebarFile(f.path);

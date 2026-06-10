@@ -198,7 +198,12 @@ export function folderProgress(node, course) {
     if (isComp) done++;
   }
   const pct = Math.round((done / files.length) * 100);
-  const weightedPct = totalWeight > 0 ? Math.round((watchedWeight / totalWeight) * 100) : 0;
+  let weightedPct = 0;
+  if (totalWeight > 0) {
+    weightedPct = Math.round((watchedWeight / totalWeight) * 100);
+  } else if (done === files.length && files.length > 0) {
+    weightedPct = 100;
+  }
   return { pct, done, total: files.length, durationDone, durationTotal, weightedPct, totalWeight, watchedWeight };
 }
 
