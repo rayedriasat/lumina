@@ -3,6 +3,9 @@ import { Ico } from './icons.js';
 import { escapeHtml, fmtTime, fmtDuration, overallCourseProgress, folderProgress, isFolderDone, getDescendantFiles, flattenAll, circularProgressSVG } from './fs.js';
 import { overallProgress, isDone, isFileSaved, cleanupMedia, loadFile, renderSubtitles, renderRightPanel, toggleComplete, loadFileByPath, nextFile, prevFile, setDone, toggleFileSave, addTimestampBookmark, removeTimestampBookmark, jumpToTimestamp } from './player.js';
 
+const APP_VERSION = '2.2.4';
+const RELEASE_DATE = '2026-06-16';
+
 export function render() {
   const app = document.getElementById('app');
   if (!app) return;
@@ -667,7 +670,7 @@ export function renderDashboard(app, { animate = true } = {}) {
 
         <!-- Footer / Authors -->
         <div class="mt-16 pt-6 border-t border-slate-700/50 flex flex-col md:flex-row items-center justify-between text-slate-500 text-sm">
-          <p>Lumina v2 &copy; ${new Date().getFullYear()}</p>
+          <p>Lumina v${APP_VERSION} &copy; ${new Date().getFullYear()} <span class="text-slate-600 text-xs ml-2">Released ${RELEASE_DATE}</span></p>
           <div class="flex gap-4 mt-4 md:mt-0">
             <a href="https://github.com/rayedriasat" target="_blank" class="hover:text-indigo-400 transition-colors">GitHub</a>
             <a href="https://www.linkedin.com/in/rayed-riasat-rabbi" target="_blank" class="hover:text-indigo-400 transition-colors">LinkedIn</a>
