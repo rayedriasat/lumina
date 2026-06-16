@@ -9,6 +9,7 @@
     "core:default",
     "dialog:default",
     "fs:default",
+    "updater:default",
     {
       "identifier": "fs:allow-read-dir",
       "allow": [{ "path": "**" }]

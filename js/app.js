@@ -495,6 +495,96 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js')
     .then(() => console.log('[Lumina] SW registered'))
     .catch(err => console.warn('[Lumina] SW failed', err));
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data.type === 'UPDATE_AVAILABLE') {
+      console.log('[Lumina] Update available:', event.data.version);
+      showUpdateNotification(event.data.version);
+    }
+  });
+}
+
+const CURRENT_VERSION = '2.2.4';
+const GITHUB_REPO = 'rayedriasat/lumina';
+const UPDATE_CHECK_KEY = 'lumina_github_update_check';
+const UPDATE_INTERVAL = 24 * 60 * 60 * 1000;
+
+async function checkGitHubForUpdates() {
+  const lastCheck = parseInt(localStorage.getItem(UPDATE_CHECK_KEY) || '0', 10);
+  const now = Date.now();
+  
+  if (now - lastCheck < UPDATE_INTERVAL) {
+    return;
+  }
+  
+  localStorage.setItem(UPDATE_CHECK_KEY, now.toString());
+  
+  try {
+    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { 'Accept': 'application/vnd.github.v3+json' }
+    });
+    
+    if (!response.ok) return;
+    
+    const release = await response.json();
+    const latestVersion = release.tag_name?.replace('v', '') || release.name?.replace('v', '');
+    
+    if (latestVersion && compareVersions(latestVersion, CURRENT_VERSION) > 0) {
+      console.log('[Lumina] New version available:', latestVersion);
+      showUpdateNotification(latestVersion, release.html_url);
+    }
+  } catch (e) {
+    console.warn('[Lumina] GitHub update check failed:', e);
+  }
+}
+
+function compareVersions(v1, v2) {
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+  const maxLen = Math.max(parts1.length, parts2.length);
+  
+  for (let i = 0; i < maxLen; i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
+}
+
+function showUpdateNotification(version, releaseUrl = null) {
+  if (document.getElementById('lumina-update-banner')) return;
+  
+  const banner = document.createElement('div');
+  banner.id = 'lumina-update-banner';
+  banner.className = 'fixed bottom-4 right-4 z-50 glass-strong rounded-xl p-4 md:p-5 max-w-md shadow-2xl border border-indigo-500/30 animate-slide-up';
+  
+  const isDesktop = window.__TAURI__ !== undefined;
+  const updateText = isDesktop 
+    ? `Version ${version} is available!`
+    : `Version ${version} is available. Refresh to update.`;
+  
+  banner.innerHTML = `
+    <div class="flex items-start gap-3">
+      <div class="mt-0.5 w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-300 flex items-center justify-center font-bold shrink-0">🔔</div>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-semibold text-slate-100">Update Available</div>
+        <p class="text-sm text-slate-300 mt-1 leading-relaxed">${updateText}</p>
+      </div>
+      <button onclick="this.parentElement.parentElement.remove()" class="p-1 rounded hover:bg-white/10 text-slate-400 shrink-0" title="Dismiss">✕</button>
+    </div>
+    <div class="mt-3 flex gap-2">
+      ${releaseUrl ? `<a href="${releaseUrl}" target="_blank" class="btn-primary text-sm px-3 py-1.5 rounded-lg flex items-center gap-1">View Release</a>` : ''}
+      <button onclick="window.location.reload()" class="btn-primary text-sm px-3 py-1.5 rounded-lg flex items-center gap-1">Refresh Now</button>
+      ${isDesktop ? `<button onclick="window.checkForTauriUpdate?.()" class="btn-ghost text-sm px-3 py-1.5 rounded-lg flex items-center gap-1">Check Desktop App</button>` : ''}
+    </div>
+  `;
+  
+  document.body.appendChild(banner);
+  
+  setTimeout(() => {
+    if (banner.parentElement) banner.remove();
+  }, 30000);
 }
 
 /* ---------- Init ---------- */
@@ -504,4 +594,30 @@ if ('serviceWorker' in navigator) {
   state.environmentWarning = detectEnvironmentWarning();
   await loadCourses();
   render();
+  
+  checkGitHubForUpdates();
+  
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.ready.then(reg => {
+      reg.active?.postMessage({ type: 'CHECK_UPDATE' });
+    });
+  }
+  
+  if (window.__TAURI__) {
+    window.checkForTauriUpdate = checkTauriUpdate;
+    checkTauriUpdate();
+  }
 })();
+
+async function checkTauriUpdate() {
+  try {
+    const { checkUpdate } = await import('@tauri-apps/plugin-updater');
+    const update = await checkUpdate();
+    if (update?.available) {
+      console.log('[Lumina] Tauri update available:', update.version);
+      showUpdateNotification(update.version, null);
+    }
+  } catch (e) {
+    console.warn('[Lumina] Tauri update check failed:', e);
+  }
+}

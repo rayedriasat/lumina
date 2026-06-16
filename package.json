@@ -1,6 +1,6 @@
 {
   "name": "lumina",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "A self-hosted, zero-backend, glassmorphism PWA that turns your offline course folders into a beautiful, sequential learning experience.",
   "main": "server.js",
   "devDependencies": {
